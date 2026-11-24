@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><?= config.nomePortal ?></title>
+  <?!= include('Styles'); ?>
+</head>
+<body>
+  <a href="#conteudo-principal" class="skip-link">Pular para o conteúdo principal</a>
+
+  <!-- Barra Superior Institucional e Acessibilidade -->
+  <div class="top-utility-bar" role="region" aria-label="Barra institucional e acessibilidade">
+    <div class="container utility-inner">
+      <span class="utility-org"><?= config.areaResponsavel ?></span>
+      <div class="accessibility-controls">
+        <span class="version-badge" title="Versão do Portal">v<?= config.versaoPortal ?></span>
+        <button type="button" class="btn-a11y" id="btn-font-dec" aria-label="Diminuir tamanho da fonte" title="Diminuir fonte">A-</button>
+        <button type="button" class="btn-a11y" id="btn-font-reset" aria-label="Restaurar tamanho padrão da fonte" title="Tamanho padrão">A</button>
+        <button type="button" class="btn-a11y" id="btn-font-inc" aria-label="Aumentar tamanho da fonte" title="Aumentar fonte">A+</button>
+        <button type="button" class="btn-a11y" id="btn-contrast" aria-pressed="false" aria-label="Alternar modo de alto contraste" title="Alto contraste">
+          Alto Contraste
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cabeçalho Principal -->
+  <header class="site-header">
+    <div class="container header-inner">
+      <div class="brand-area">
+        <!-- Área configurável de identidade visual oficial COEGD / SEDUC-SP -->
+        <div class="brand-logo" aria-hidden="true">
+          <? if (config.logoUrl) { ?>
+            <img src="<?= config.logoUrl ?>" alt="Logotipo oficial COEGD SEDUC-SP">
+          <? } else { ?>
+            <!-- Emblema vetorial institucional COEGD-SP (Hexágono tecnológico + Mapa de São Paulo) -->
+            <svg width="46" height="46" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M50 8L85 28V72L50 92L15 72V28L50 8Z" stroke="#155E9A" stroke-width="4.5" stroke-linejoin="round"/>
+              <path d="M50 8L74 22M85 45L72 37M68 81L55 73M15 55L28 47M32 19L45 27" stroke="#00838F" stroke-width="4" stroke-linecap="round"/>
+              <circle cx="50" cy="8" r="5" fill="#003366"/>
+              <circle cx="85" cy="28" r="5" fill="#0097A7"/>
+              <circle cx="85" cy="72" r="5" fill="#2E7D32"/>
+              <circle cx="50" cy="92" r="5" fill="#155E9A"/>
+              <circle cx="15" cy="72" r="5" fill="#283593"/>
+              <circle cx="15" cy="28" r="5" fill="#155E9A"/>
+              <circle cx="72" cy="37" r="4" fill="#00ACC1"/>
+              <circle cx="28" cy="47" r="4" fill="#155E9A"/>
+              <!-- Representação estilizada do Estado de São Paulo -->
+              <path d="M35 39H56L62 45L71 48L66 56L56 61L48 65L39 60L30 53L35 39Z" fill="url(#spGrad)"/>
+              <defs>
+                <linearGradient id="spGrad" x1="30" y1="39" x2="71" y2="65" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="#003366"/>
+                  <stop offset="0.55" stop-color="#155E9A"/>
+                  <stop offset="1" stop-color="#0097A7"/>
+                </linearGradient>
+              </defs>
+            </svg>
+          <? } ?>
+        </div>
+        <div class="brand-texts">
+          <span class="brand-kicker">SEDUC-SP • Manual de Gestão</span>
+          <h1 class="brand-title"><?= config.nomePortal ?></h1>
+        </div>
+      </div>
+
+      <button type="button" class="mobile-menu-toggle" id="btn-mobile-menu" aria-expanded="false" aria-controls="main-nav" aria-label="Abrir menu de navegação">
+        ☰ Menu
+      </button>
+
+      <nav id="main-nav" class="main-nav" aria-label="Navegação principal">
+        <ul class="nav-list">
+          <li><button type="button" class="nav-link active" data-view="inicio">Início</button></li>
+          <li><button type="button" class="nav-link" data-view="temas">Temas</button></li>
+          <li><button type="button" class="nav-link" data-view="documentos">Documentos</button></li>
+          <li><button type="button" class="nav-link" data-view="modelos">Modelos e ferramentas</button></li>
+          <li><button type="button" class="nav-link" data-view="fluxos">Fluxos</button></li>
+          <li><button type="button" class="nav-link" data-view="faq">Perguntas frequentes</button></li>
+          <li><button type="button" class="nav-link" data-view="sobre">Sobre o manual</button></li>
+          <li><button type="button" class="nav-link" data-view="contato">Contato</button></li>
+          <? if (isAdmin) { ?>
+            <li><button type="button" class="nav-link nav-link-admin" data-view="admin">Administração</button></li>
+          <? } ?>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Área de Destaque / Hero com Buscador Central -->
+  <section class="hero-section" id="hero-busca" aria-label="Pesquisa no Manual de Gestão">
+    <div class="container hero-inner">
+      <h2 class="hero-title">Manual de Gestão da Tecnologia</h2>
+      <p class="hero-subtitle"><?= config.subtituloPortal ?></p>
+
+      <form id="form-busca" class="search-box-wrapper" role="search">
+        <label for="input-busca" class="sr-only">Pesquisar orientações, fluxos, modelos ou palavras-chave</label>
+        <div class="search-input-group">
+          <input
+            type="search"
+            id="input-busca"
+            class="search-input"
+            placeholder="Busque por tema, procedimento, fluxo, modelo ou palavra-chave..."
+            autocomplete="off"
+          >
+          <button type="button" id="btn-limpar-busca" class="btn-clear-search hidden" aria-label="Limpar texto da pesquisa" title="Limpar">✕</button>
+          <button type="submit" id="btn-pesquisar" class="btn-primary search-submit">Pesquisar</button>
+        </div>
+      </form>
+
+      <!-- Sugestões Rápidas de Pesquisa -->
+      <div class="search-suggestions" aria-label="Sugestões de pesquisa">
+        <span class="suggestions-label">Sugestões:</span>
+        <button type="button" class="chip-suggestion" data-query="Como priorizar escolas?">Como priorizar escolas?</button>
+        <button type="button" class="chip-suggestion" data-query="Como elaborar o planejamento anual?">Como elaborar o planejamento anual?</button>
+        <button type="button" class="chip-suggestion" data-query="Como registrar uma visita?">Como registrar uma visita?</button>
+        <button type="button" class="chip-suggestion" data-query="Fluxo de escalonamento">Fluxo de escalonamento</button>
+        <button type="button" class="chip-suggestion" data-query="Gestão de inventário">Gestão de inventário</button>
+        <button type="button" class="chip-suggestion" data-query="Responsabilidades do SEINTEC">Responsabilidades do SEINTEC</button>
+        <button type="button" class="chip-suggestion" data-query="Responsabilidades do SETEC">Responsabilidades do SETEC</button>
+        <button type="button" class="chip-suggestion" data-query="Situações críticas">Situações críticas</button>
+        <button type="button" class="chip-suggestion" data-query="Plano de trabalho">Plano de trabalho</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Conteúdo Principal -->
+  <main id="conteudo-principal" class="container main-content" tabindex="-1">
+
+    <!-- Indicador de Carregamento -->
+    <div id="loading-box" class="status-box loading-box" role="status" aria-live="polite">
+      <div class="spinner" aria-hidden="true"></div>
+      <p>Carregando conteúdos...</p>
+    </div>
+
+    <!-- Mensagem de Erro Amigável -->
+    <div id="error-box" class="status-box error-box hidden" role="alert">
+      <h3>Não foi possível concluir a consulta neste momento.</h3>
+      <p>Tente novamente ou comunique a equipe responsável.</p>
+      <button type="button" class="btn-secondary" id="btn-tentar-novamente">Tentar novamente</button>
+    </div>
+
+    <!-- VIEW: INÍCIO / DOCUMENTOS / MODELOS / FLUXOS (Catálogo com Filtros) -->
+    <section id="view-catalogo" class="app-view">
+      <!-- Acesso Rápido aos Principais Temas (visível na Home quando sem busca ativa) -->
+      <div id="home-quick-themes" class="section-block">
+        <div class="section-header-row">
+          <h2 class="section-title">Acesso rápido por tema</h2>
+          <button type="button" class="btn-link" data-view="temas">Ver todos os temas →</button>
+        </div>
+        <div id="quick-themes-grid" class="themes-grid-compact"></div>
+      </div>
+
+      <!-- Barra de Cabeçalho da Listagem + Botão de Filtros Mobile -->
+      <div class="catalog-toolbar">
+        <div>
+          <h2 id="catalog-heading" class="section-title">Conteúdos em destaque e documentos</h2>
+          <p id="results-counter" class="results-counter" aria-live="polite">Exibindo conteúdos publicados</p>
+        </div>
+        <button type="button" id="btn-toggle-filters" class="btn-secondary mobile-only" aria-expanded="false" aria-controls="filters-panel">
+          Filtrar resultados
+        </button>
+      </div>
+
+      <div class="catalog-layout">
+        <!-- Painel de Filtros Combinados -->
+        <aside id="filters-panel" class="filters-panel" aria-label="Filtros de pesquisa">
+          <div class="filters-header">
+            <h3>Filtros</h3>
+            <button type="button" id="btn-limpar-filtros" class="btn-link-sm">Limpar filtros</button>
+          </div>
+
+          <div class="filter-group">
+            <label for="filtro-tema">Tema</label>
+            <select id="filtro-tema" class="form-control"><option value="">Todos os temas</option></select>
+          </div>
+
+          <div class="filter-group">
+            <label for="filtro-subtema">Subtema</label>
+            <select id="filtro-subtema" class="form-control"><option value="">Todos os subtemas</option></select>
+          </div>
+
+          <div class="filter-group">
+            <label for="filtro-publico">Público</label>
+            <select id="filtro-publico" class="form-control"><option value="">Todos os públicos</option></select>
+          </div>
+
+          <div class="filter-group">
+            <label for="filtro-tipo">Tipo de material</label>
+            <select id="filtro-tipo" class="form-control"><option value="">Todos os tipos</option></select>
+          </div>
+
+          <div class="filter-group">
+            <label for="filtro-responsavel">Área responsável</label>
+            <select id="filtro-responsavel" class="form-control"><option value="">Todas as áreas</option></select>
+          </div>
+
+          <div class="filter-group">
+            <label for="filtro-ano">Ano de atualização</label>
+            <select id="filtro-ano" class="form-control"><option value="">Todos os anos</option></select>
+          </div>
+
+          <div class="filter-group checkbox-group">
+            <input type="checkbox" id="filtro-destaque">
+            <label for="filtro-destaque">Somente conteúdos em destaque</label>
+          </div>
+        </aside>
+
+        <!-- Grade de Resultados e Paginação -->
+        <div class="results-area">
+          <!-- Estado Vazio / Nenhum Resultado -->
+          <div id="empty-state" class="empty-state hidden" role="status">
+            <h3>Nenhum conteúdo foi localizado.</h3>
+            <p>Tente:</p>
+            <ul>
+              <li>utilizar menos palavras;</li>
+              <li>verificar a grafia;</li>
+              <li>pesquisar pelo tema;</li>
+              <li>remover alguns filtros.</li>
+            </ul>
+            <div id="similar-terms-box" class="similar-terms hidden">
+              <p><strong>Termos semelhantes sugeridos:</strong></p>
+              <div id="similar-terms-list" class="chips-row"></div>
+            </div>
+          </div>
+
+          <div id="results-grid" class="results-grid"></div>
+          <nav id="pagination-nav" class="pagination-nav" aria-label="Paginação dos resultados"></nav>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW: TODOS OS TEMAS -->
+    <section id="view-temas" class="app-view hidden">
+      <div class="section-header-row">
+        <div>
+          <h2 class="section-title">Organização Temática</h2>
+          <p class="section-desc">Selecione um tema para consultar todas as orientações, fluxos e modelos vinculados.</p>
+        </div>
+      </div>
+      <div id="all-themes-grid" class="themes-grid-full"></div>
+    </section>
+
+    <!-- VIEW: PERGUNTAS FREQUENTES (ACORDEÃO) -->
+    <section id="view-faq" class="app-view hidden">
+      <div class="section-header-row">
+        <div>
+          <h2 class="section-title">Perguntas Frequentes (FAQ)</h2>
+          <p class="section-desc">Dúvidas recorrentes sobre procedimentos, ferramentas e utilização do Manual de Gestão.</p>
+        </div>
+      </div>
+      <div id="faq-accordion" class="accordion-list"></div>
+    </section>
+
+    <!-- VIEW: SOBRE O MANUAL -->
+    <section id="view-sobre" class="app-view hidden">
+      <article class="institutional-card">
+        <h2>Sobre o Manual de Gestão da Tecnologia — SEDUC-SP</h2>
+        <p>
+          O <strong>Manual de Gestão da Tecnologia</strong> é uma iniciativa institucional conduzida pelo Grupo de Trabalho da
+          <strong>COEGD (Coordenadoria de Gestão Digital)</strong> da Secretaria da Educação do Estado de São Paulo,
+          com o objetivo de consolidar, padronizar e facilitar o acesso às diretrizes operacionais de tecnologia educacional.
+        </p>
+        <h3>Público-alvo</h3>
+        <ul>
+          <li><strong>SEINTECs</strong> — Supervisores / Equipes de Tecnologia nas Unidades Regionais de Ensino;</li>
+          <li><strong>SETECs</strong> — Equipes técnicas de suporte e infraestrutura regional;</li>
+          <li><strong>Profissionais da COEGD</strong> — Equipes centrais de governança, projetos e monitoramento;</li>
+          <li><strong>Diretores de Escola e Gestores das UREs</strong> — Lideranças escolares e regionais;</li>
+          <li><strong>Equipes técnicas e administrativas</strong> envolvidas na gestão tecnológica da rede estadual.</li>
+        </ul>
+        <h3>Governança e Atualização Contínua</h3>
+        <p>
+          Todos os documentos publicados permanecem armazenados em repositório institucional controlado no Google Drive,
+          garantindo rastreabilidade de versões, integridade dos modelos oficiais e atualização ágil sem interrupção do portal.
+        </p>
+      </article>
+    </section>
+
+    <!-- VIEW: CONTATO -->
+    <section id="view-contato" class="app-view hidden">
+      <article class="institutional-card">
+        <h2>Contato e Suporte Institucional</h2>
+        <p>
+          Para dúvidas sobre a aplicação das diretrizes, sugestões de melhoria ou solicitação de inclusão de novos materiais
+          no Manual de Gestão da Tecnologia, entre em contato com a equipe responsável:
+        </p>
+        <div class="contact-box">
+          <p><strong>Área Responsável:</strong> <?= config.areaResponsavel ?></p>
+          <p><strong>E-mail Institucional:</strong> <a href="mailto:<?= config.emailContato ?>"><?= config.emailContato ?></a></p>
+          <p><strong>Abertura de Solicitações Técnicas:</strong> Utilize os fluxos oficiais catalogados na seção <em>Gestão de chamados</em>.</p>
+        </div>
+      </article>
+    </section>
+
+    <!-- VIEW: ÁREA ADMINISTRATIVA (Renderizada somente para administradores) -->
+    <? if (isAdmin) { ?>
+      <?!= include('Admin'); ?>
+    <? } ?>
+
+  </main>
+
+  <!-- Rodapé Institucional -->
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <p><strong><?= config.nomePortal ?></strong> — Secretaria da Educação do Estado de São Paulo (SEDUC-SP)</p>
+      <p class="footer-meta">Acesso restrito ao domínio institucional • Conformidade LGPD (Lei nº 13.709/2018)</p>
+    </div>
+  </footer>
+
+  <!-- Modais e Notificações -->
+  <?!= include('Components'); ?>
+
+  <!-- Toast de Feedback Visual -->
+  <div id="toast-notification" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <?!= include('Scripts'); ?>
+</body>
+</html>

@@ -1,0 +1,153 @@
+<!-- Modal: Detalhes do Conteúdo -->
+<div id="modal-detalhes" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-detalhes-titulo">
+  <div class="modal-dialog">
+    <div class="modal-header">
+      <div>
+        <span id="det-tema" class="badge-tema"></span>
+        <h2 id="modal-detalhes-titulo" class="card-title" style="margin-top:8px;"></h2>
+      </div>
+      <button type="button" class="modal-close" id="btn-fechar-detalhes" aria-label="Fechar detalhes">✕ Fechar</button>
+    </div>
+
+    <div id="det-corpo">
+      <p><strong>Resumo:</strong> <span id="det-resumo"></span></p>
+      <p id="det-objetivo-wrap"><strong>Objetivo:</strong> <span id="det-objetivo"></span></p>
+
+      <div class="detail-grid">
+        <div><strong>Público:</strong> <span id="det-publico"></span></div>
+        <div><strong>Tipo de material:</strong> <span id="det-tipo"></span></div>
+        <div><strong>Subtema:</strong> <span id="det-subtema"></span></div>
+        <div><strong>Área responsável:</strong> <span id="det-responsavel"></span></div>
+        <div><strong>Versão:</strong> <span id="det-versao"></span></div>
+        <div><strong>Última atualização:</strong> <span id="det-atualizacao"></span></div>
+      </div>
+
+      <div id="det-keywords-wrap" style="margin-bottom:14px;">
+        <strong>Palavras-chave:</strong>
+        <div id="det-keywords" class="card-keywords" style="margin-top:6px;"></div>
+      </div>
+
+      <!-- Ações de Acesso, Cópia e Download -->
+      <div class="modal-actions-bar">
+        <a id="det-btn-abrir" href="#" target="_blank" rel="noopener noreferrer" class="btn-primary">Abrir arquivo original</a>
+        <a id="det-btn-copiar-drive" href="#" target="_blank" rel="noopener noreferrer" class="btn-secondary">Fazer uma cópia</a>
+        <a id="det-btn-download" href="#" target="_blank" rel="noopener noreferrer" class="btn-secondary">Baixar arquivo</a>
+        <button type="button" id="det-btn-copiar-link" class="btn-secondary">Copiar link</button>
+      </div>
+
+      <!-- Widget de Feedback (LGPD: sem dados pessoais desnecessários) -->
+      <div class="feedback-widget" id="feedback-box">
+        <strong>Este conteúdo foi útil?</strong>
+        <div class="feedback-buttons">
+          <button type="button" class="btn-secondary" id="btn-fb-sim">Sim</button>
+          <button type="button" class="btn-secondary" id="btn-fb-nao">Não</button>
+        </div>
+        <div id="fb-comentario-area" class="hidden" style="margin-top:10px;">
+          <label for="fb-comentario-texto" style="display:block;font-size:0.85rem;margin-bottom:4px;">
+            Comentário opcional (ajude-nos a melhorar este material):
+          </label>
+          <textarea id="fb-comentario-texto" class="form-control" rows="2" maxlength="600" placeholder="Descreva o que faltou ou pode ser aprimorado..."></textarea>
+          <button type="button" class="btn-primary" id="btn-fb-enviar-nao" style="margin-top:8px;">Enviar feedback</button>
+        </div>
+        <p id="fb-confirmacao" class="hidden" style="margin:8px 0 0;color:var(--verde);font-weight:bold;"></p>
+      </div>
+
+      <!-- Materiais Relacionados (máximo 4) -->
+      <div id="det-relacionados-section" style="margin-top:20px;">
+        <h3 style="font-size:1rem;color:var(--azul-institucional);margin-bottom:8px;">Materiais relacionados</h3>
+        <div id="det-relacionados-list" class="related-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Cadastro / Edição Administrativa -->
+<div id="modal-admin-form" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modal-admin-titulo">
+  <div class="modal-dialog">
+    <div class="modal-header">
+      <h2 id="modal-admin-titulo" class="card-title">Cadastrar / Editar Conteúdo</h2>
+      <button type="button" class="modal-close" id="btn-fechar-admin-form" aria-label="Fechar formulário">✕ Fechar</button>
+    </div>
+
+    <form id="form-admin-conteudo">
+      <input type="hidden" id="adm-id">
+      <div class="detail-grid" style="background:transparent;padding:0;">
+        <div>
+          <label for="adm-titulo"><strong>Título *</strong></label>
+          <input type="text" id="adm-titulo" class="form-control" required>
+        </div>
+        <div>
+          <label for="adm-tema"><strong>Tema *</strong></label>
+          <input type="text" id="adm-tema" class="form-control" required placeholder="Ex.: Planejamento e governança">
+        </div>
+        <div>
+          <label for="adm-subtema"><strong>Subtema</strong></label>
+          <input type="text" id="adm-subtema" class="form-control">
+        </div>
+        <div>
+          <label for="adm-tipo"><strong>Tipo de material</strong></label>
+          <input type="text" id="adm-tipo" class="form-control" placeholder="Manual, Fluxo, Checklist, Modelo...">
+        </div>
+        <div>
+          <label for="adm-publico"><strong>Público</strong></label>
+          <input type="text" id="adm-publico" class="form-control" placeholder="SEINTEC, SETEC, Diretores">
+        </div>
+        <div>
+          <label for="adm-responsavel"><strong>Área responsável</strong></label>
+          <input type="text" id="adm-responsavel" class="form-control" value="COEGD / GT Manual">
+        </div>
+        <div>
+          <label for="adm-file-id"><strong>ID do arquivo no Drive</strong></label>
+          <input type="text" id="adm-file-id" class="form-control">
+        </div>
+        <div>
+          <label for="adm-url"><strong>URL direta (opcional se ID informado)</strong></label>
+          <input type="url" id="adm-url" class="form-control">
+        </div>
+        <div>
+          <label for="adm-versao"><strong>Versão</strong></label>
+          <input type="text" id="adm-versao" class="form-control" value="1.0">
+        </div>
+        <div>
+          <label for="adm-status"><strong>Status</strong></label>
+          <select id="adm-status" class="form-control">
+            <option value="Publicado">Publicado</option>
+            <option value="Revisão">Revisão</option>
+            <option value="Arquivado">Arquivado</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="margin-top:10px;">
+        <label for="adm-resumo"><strong>Resumo</strong></label>
+        <textarea id="adm-resumo" class="form-control" rows="2"></textarea>
+      </div>
+
+      <div style="margin-top:10px;">
+        <label for="adm-objetivo"><strong>Objetivo detalhado</strong></label>
+        <textarea id="adm-objetivo" class="form-control" rows="2"></textarea>
+      </div>
+
+      <div class="detail-grid" style="background:transparent;padding:0;margin-top:10px;">
+        <div>
+          <label for="adm-palavras"><strong>Palavras-chave (separadas por vírgula)</strong></label>
+          <input type="text" id="adm-palavras" class="form-control">
+        </div>
+        <div>
+          <label for="adm-relacionados"><strong>IDs Relacionados (ex.: MG-0001, MG-0002)</strong></label>
+          <input type="text" id="adm-relacionados" class="form-control">
+        </div>
+      </div>
+
+      <div class="checkbox-group" style="margin-top:12px;">
+        <input type="checkbox" id="adm-destaque">
+        <label for="adm-destaque">Exibir como conteúdo em destaque</label>
+      </div>
+
+      <div class="modal-actions-bar" style="justify-content:flex-end;">
+        <button type="button" class="btn-secondary" id="btn-cancelar-admin-form">Cancelar</button>
+        <button type="submit" class="btn-primary">Salvar conteúdo</button>
+      </div>
+    </form>
+  </div>
+</div>

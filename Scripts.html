@@ -1,0 +1,889 @@
+<script>
+  (function () {
+    'use strict';
+
+    const state = {
+      config: null,
+      isAdmin: false,
+      viewAtual: 'inicio',
+      termoBusca: '',
+      paginaAtual: 1,
+      filtros: {
+        tema: '',
+        subtema: '',
+        publico: '',
+        tipo: '',
+        responsavel: '',
+        ano: '',
+        destaque: false,
+        apenasModelos: false,
+        apenasFluxos: false
+      },
+      temas: [],
+      faqs: [],
+      conteudoModalAtual: null,
+      adminConteudosCache: [],
+      fontScale: 1
+    };
+
+    let debounceTimer = null;
+
+    // Wrapper Promise para chamadas google.script.run
+    function runServer(fnName, ...args) {
+      return new Promise((resolve, reject) => {
+        google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(reject)[fnName](...args);
+      });
+    }
+
+    // Escapa caracteres HTML para prevenir XSS
+    function escapeHtml(str) {
+      return String(str === null || str === undefined ? '' : str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function showToast(msg) {
+      const el = document.getElementById('toast-notification');
+      el.textContent = msg;
+      el.classList.remove('hidden');
+      clearTimeout(el._timer);
+      el._timer = setTimeout(() => el.classList.add('hidden'), 3200);
+    }
+
+    function setLoading(ativo) {
+      document.getElementById('loading-box').classList.toggle('hidden', !ativo);
+      if (ativo) document.getElementById('error-box').classList.add('hidden');
+    }
+
+    function showError() {
+      setLoading(false);
+      document.getElementById('error-box').classList.remove('hidden');
+    }
+
+    // =========================================================================
+    // INICIALIZAÇÃO
+    // =========================================================================
+    document.addEventListener('DOMContentLoaded', () => {
+      restaurarPreferenciasAcessibilidade();
+      registrarEventos();
+      carregarDadosIniciais();
+    });
+
+    async function carregarDadosIniciais() {
+      setLoading(true);
+      try {
+        const res = await runServer('getInitialAppData');
+        if (!res || !res.sucesso) {
+          showError();
+          return;
+        }
+        state.config = res.config;
+        state.isAdmin = res.isAdmin;
+        state.temas = res.temas || [];
+        state.faqs = res.faqs || [];
+
+        renderizarTemasRapidos(state.temas);
+        renderizarTodosTemas(state.temas);
+        renderizarFaqs(state.faqs);
+        popularSelectsFiltros(res.resultadosIniciais.opcoesFiltros);
+        renderizarResultados(res.resultadosIniciais);
+        setLoading(false);
+      } catch (e) {
+        showError();
+      }
+    }
+
+    // =========================================================================
+    // BUSCA E FILTROS (DEBOUNCE 300ms)
+    // =========================================================================
+    function agendarBusca(resetPagina) {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        executarBusca(resetPagina ? 1 : state.paginaAtual);
+      }, 300);
+    }
+
+    async function executarBusca(pagina) {
+      state.paginaAtual = pagina || 1;
+      atualizarVisibilidadeHomeBlocks();
+      setLoading(true);
+
+      try {
+        const res = await runServer('pesquisarConteudos', state.termoBusca, state.filtros, state.paginaAtual);
+        setLoading(false);
+        renderizarResultados(res);
+      } catch (e) {
+        showError();
+      }
+    }
+
+    function atualizarVisibilidadeHomeBlocks() {
+      const temFiltroAtivo = Boolean(
+        state.termoBusca ||
+        state.filtros.tema ||
+        state.filtros.subtema ||
+        state.filtros.publico ||
+        state.filtros.tipo ||
+        state.filtros.responsavel ||
+        state.filtros.ano ||
+        state.filtros.destaque
+      );
+
+      const quickThemes = document.getElementById('home-quick-themes');
+      const heading = document.getElementById('catalog-heading');
+
+      if (state.viewAtual === 'inicio' && !temFiltroAtivo) {
+        quickThemes.classList.remove('hidden');
+        heading.textContent = 'Conteúdos em destaque e documentos recentes';
+      } else {
+        quickThemes.classList.add('hidden');
+        if (state.viewAtual === 'modelos') {
+          heading.textContent = 'Modelos, checklists, planilhas e formulários';
+        } else if (state.viewAtual === 'fluxos') {
+          heading.textContent = 'Fluxos operacionais e de atendimento';
+        } else if (state.viewAtual === 'documentos') {
+          heading.textContent = 'Todos os documentos publicados';
+        } else {
+          heading.textContent = 'Resultados da pesquisa';
+        }
+      }
+    }
+
+    // =========================================================================
+    // RENDERIZAÇÃO DE CARTÕES, TEMAS E PAGINAÇÃO
+    // =========================================================================
+    function renderizarResultados(data) {
+      const grid = document.getElementById('results-grid');
+      const empty = document.getElementById('empty-state');
+      const counter = document.getElementById('results-counter');
+      const pagNav = document.getElementById('pagination-nav');
+
+      const total = data.totalResultados || 0;
+      counter.textContent = total === 1
+        ? '1 conteúdo encontrado'
+        : total + ' conteúdos encontrados';
+
+      if (total === 0) {
+        grid.innerHTML = '';
+        pagNav.innerHTML = '';
+        empty.classList.remove('hidden');
+
+        const simBox = document.getElementById('similar-terms-box');
+        const simList = document.getElementById('similar-terms-list');
+        if (data.sugestoesSemelhantes && data.sugestoesSemelhantes.length > 0) {
+          simBox.classList.remove('hidden');
+          simList.innerHTML = data.sugestoesSemelhantes.map(s =>
+            `<button type="button" class="chip-alt" data-sug="${escapeHtml(s)}">${escapeHtml(s)}</button>`
+          ).join('');
+          simList.querySelectorAll('.chip-alt').forEach(btn => {
+            btn.addEventListener('click', () => {
+              document.getElementById('input-busca').value = btn.dataset.sug;
+              state.termoBusca = btn.dataset.sug;
+              executarBusca(1);
+            });
+          });
+        } else {
+          simBox.classList.add('hidden');
+        }
+        return;
+      }
+
+      empty.classList.add('hidden');
+
+      grid.innerHTML = data.resultados.map(item => {
+        const keywords = (item.palavrasChave || '')
+          .split(',')
+          .map(k => k.trim())
+          .filter(Boolean)
+          .slice(0, 4);
+
+        return `
+          <article class="content-card ${item.destaque ? 'is-featured' : ''}">
+            <div>
+              <div class="card-badges">
+                <span class="badge-tema">${escapeHtml(item.tema)}</span>
+                ${item.destaque ? '<span class="badge-destaque">Destaque</span>' : ''}
+              </div>
+              <h3 class="card-title">${escapeHtml(item.titulo)}</h3>
+              <p class="card-summary">${escapeHtml(item.resumo)}</p>
+              <div class="card-meta-list">
+                <div><strong>Tipo:</strong> ${escapeHtml(item.tipo)}</div>
+                <div><strong>Público:</strong> ${escapeHtml(item.publico)}</div>
+                <div><strong>Versão:</strong> ${escapeHtml(item.versao)}</div>
+                <div><strong>Atualização:</strong> ${escapeHtml(item.dataAtualizacao)}</div>
+                <div style="grid-column: 1 / -1;"><strong>Responsável:</strong> ${escapeHtml(item.responsavel)}</div>
+              </div>
+              ${keywords.length ? `
+                <div class="card-keywords">
+                  ${keywords.map(kw => `<span class="kw-tag">${escapeHtml(kw)}</span>`).join('')}
+                </div>
+              ` : ''}
+            </div>
+            <div class="card-actions">
+              <a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer"
+                 class="btn-primary js-acessar-direto" data-id="${escapeHtml(item.id)}">
+                Acessar conteúdo
+              </a>
+              <button type="button" class="btn-secondary js-ver-detalhes" data-id="${escapeHtml(item.id)}">
+                Ver detalhes
+              </button>
+            </div>
+          </article>
+        `;
+      }).join('');
+
+      // Eventos dos cartões
+      grid.querySelectorAll('.js-acessar-direto').forEach(link => {
+        link.addEventListener('click', () => {
+          const item = data.resultados.find(r => r.id === link.dataset.id);
+          if (item) {
+            runServer('registrarAcesso', {
+              id: item.id,
+              titulo: item.titulo,
+              tema: item.tema,
+              tipo: item.tipo,
+              termoPesquisado: state.termoBusca,
+              origem: 'Cartão de resultado'
+            });
+          }
+        });
+      });
+
+      grid.querySelectorAll('.js-ver-detalhes').forEach(btn => {
+        btn.addEventListener('click', () => abrirModalDetalhes(btn.dataset.id));
+      });
+
+      renderizarPaginacao(data.paginaAtual, data.totalPaginas);
+    }
+
+    function renderizarPaginacao(paginaAtual, totalPaginas) {
+      const nav = document.getElementById('pagination-nav');
+      if (totalPaginas <= 1) {
+        nav.innerHTML = '';
+        return;
+      }
+
+      let html = `<button type="button" class="page-btn" ${paginaAtual <= 1 ? 'disabled' : ''} data-page="${paginaAtual - 1}">Anterior</button>`;
+      for (let p = 1; p <= totalPaginas; p++) {
+        html += `<button type="button" class="page-btn ${p === paginaAtual ? 'active' : ''}" data-page="${p}">${p}</button>`;
+      }
+      html += `<button type="button" class="page-btn" ${paginaAtual >= totalPaginas ? 'disabled' : ''} data-page="${paginaAtual + 1}">Próxima</button>`;
+
+      nav.innerHTML = html;
+      nav.querySelectorAll('.page-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const target = Number(btn.dataset.page);
+          if (target >= 1 && target <= totalPaginas) {
+            executarBusca(target);
+            document.getElementById('catalog-heading').scrollIntoView({ behavior: 'smooth' });
+          }
+        });
+      });
+    }
+
+    function renderizarTemasRapidos(temas) {
+      const container = document.getElementById('quick-themes-grid');
+      container.innerHTML = temas.slice(0, 8).map(t => `
+        <button type="button" class="theme-card js-select-theme" data-tema="${escapeHtml(t.nome)}">
+          <div class="theme-card-top">
+            <span class="badge-tema">Tema</span>
+            <span class="theme-count">${t.quantidade}</span>
+          </div>
+          <h3>${escapeHtml(t.nome)}</h3>
+        </button>
+      `).join('');
+
+      container.querySelectorAll('.js-select-theme').forEach(btn => {
+        btn.addEventListener('click', () => filtrarPorTema(btn.dataset.tema));
+      });
+    }
+
+    function renderizarTodosTemas(temas) {
+      const container = document.getElementById('all-themes-grid');
+      container.innerHTML = temas.map(t => `
+        <button type="button" class="theme-card js-select-theme" data-tema="${escapeHtml(t.nome)}">
+          <div class="theme-card-top">
+            <span class="badge-tema">Área temática</span>
+            <span class="theme-count">${t.quantidade} materiais</span>
+          </div>
+          <h3>${escapeHtml(t.nome)}</h3>
+          <p>${escapeHtml(t.descricao)}</p>
+        </button>
+      `).join('');
+
+      container.querySelectorAll('.js-select-theme').forEach(btn => {
+        btn.addEventListener('click', () => filtrarPorTema(btn.dataset.tema));
+      });
+    }
+
+    function filtrarPorTema(nomeTema) {
+      limparTodosFiltros(false);
+      state.filtros.tema = nomeTema;
+      document.getElementById('filtro-tema').value = nomeTema;
+      navegarParaView('documentos');
+      executarBusca(1);
+    }
+
+    function popularSelectsFiltros(opcoes) {
+      if (!opcoes) return;
+      preencherSelect('filtro-tema', opcoes.temas, 'Todos os temas');
+      preencherSelect('filtro-subtema', opcoes.subtemas, 'Todos os subtemas');
+      preencherSelect('filtro-publico', opcoes.publicos, 'Todos os públicos');
+      preencherSelect('filtro-tipo', opcoes.tipos, 'Todos os tipos');
+      preencherSelect('filtro-responsavel', opcoes.responsaveis, 'Todas as áreas');
+      preencherSelect('filtro-ano', opcoes.anos, 'Todos os anos');
+    }
+
+    function preencherSelect(elementId, lista, placeholder) {
+      const sel = document.getElementById(elementId);
+      const valorAtual = sel.value;
+      sel.innerHTML = `<option value="">${placeholder}</option>` +
+        (lista || []).map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+      sel.value = valorAtual;
+    }
+
+    function renderizarFaqs(faqs) {
+      const container = document.getElementById('faq-accordion');
+      if (!faqs || faqs.length === 0) {
+        container.innerHTML = '<p>Nenhuma pergunta frequente cadastrada no momento.</p>';
+        return;
+      }
+
+      container.innerHTML = faqs.map((f, idx) => `
+        <div class="accordion-item">
+          <button type="button" class="accordion-trigger" aria-expanded="false" aria-controls="faq-panel-${idx}">
+            <span>${escapeHtml(f.pergunta)}</span>
+            <span aria-hidden="true">+</span>
+          </button>
+          <div id="faq-panel-${idx}" class="accordion-panel hidden">
+            <p>${escapeHtml(f.resposta)}</p>
+          </div>
+        </div>
+      `).join('');
+
+      container.querySelectorAll('.accordion-trigger').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const expanded = btn.getAttribute('aria-expanded') === 'true';
+          btn.setAttribute('aria-expanded', String(!expanded));
+          btn.lastElementChild.textContent = expanded ? '+' : '−';
+          document.getElementById(btn.getAttribute('aria-controls')).classList.toggle('hidden', expanded);
+        });
+      });
+    }
+
+    // =========================================================================
+    // MODAL DE DETALHES E FEEDBACK
+    // =========================================================================
+    async function abrirModalDetalhes(id) {
+      setLoading(true);
+      try {
+        const item = await runServer('getConteudoPorId', id);
+        setLoading(false);
+        if (!item) {
+          showToast('Conteúdo não encontrado.');
+          return;
+        }
+
+        state.conteudoModalAtual = item;
+
+        document.getElementById('det-tema').textContent = item.tema;
+        document.getElementById('modal-detalhes-titulo').textContent = item.titulo;
+        document.getElementById('det-resumo').textContent = item.resumo;
+
+        const objWrap = document.getElementById('det-objetivo-wrap');
+        if (item.objetivo) {
+          objWrap.classList.remove('hidden');
+          document.getElementById('det-objetivo').textContent = item.objetivo;
+        } else {
+          objWrap.classList.add('hidden');
+        }
+
+        document.getElementById('det-publico').textContent = item.publico;
+        document.getElementById('det-tipo').textContent = item.tipo;
+        document.getElementById('det-subtema').textContent = item.subtema || '—';
+        document.getElementById('det-responsavel').textContent = item.responsavel;
+        document.getElementById('det-versao').textContent = item.versao;
+        document.getElementById('det-atualizacao').textContent = item.dataAtualizacao;
+
+        const kwList = (item.palavrasChave || '').split(',').map(s => s.trim()).filter(Boolean);
+        document.getElementById('det-keywords').innerHTML = kwList
+          .map(k => `<span class="kw-tag">${escapeHtml(k)}</span>`).join('');
+
+        const btnAbrir = document.getElementById('det-btn-abrir');
+        const btnCopiarDrive = document.getElementById('det-btn-copiar-drive');
+        const btnDownload = document.getElementById('det-btn-download');
+
+        btnAbrir.href = item.url;
+        btnCopiarDrive.href = item.urlCopiar || item.url;
+        btnDownload.href = item.urlDownload || item.url;
+
+        // Reseta widget de feedback
+        document.getElementById('fb-comentario-area').classList.add('hidden');
+        document.getElementById('fb-comentario-texto').value = '';
+        document.getElementById('fb-confirmacao').classList.add('hidden');
+
+        // Materiais relacionados
+        const relSec = document.getElementById('det-relacionados-section');
+        const relList = document.getElementById('det-relacionados-list');
+        if (item.relacionados && item.relacionados.length > 0) {
+          relSec.classList.remove('hidden');
+          relList.innerHTML = item.relacionados.map(r => `
+            <button type="button" class="related-item-btn js-open-rel" data-id="${escapeHtml(r.id)}">
+              <strong style="display:block;color:var(--azul-institucional);font-size:0.88rem;">${escapeHtml(r.titulo)}</strong>
+              <span style="font-size:0.78rem;color:var(--cinza-suave);">${escapeHtml(r.tema)} • ${escapeHtml(r.tipo)}</span>
+            </button>
+          `).join('');
+          relList.querySelectorAll('.js-open-rel').forEach(b => {
+            b.addEventListener('click', () => abrirModalDetalhes(b.dataset.id));
+          });
+        } else {
+          relSec.classList.add('hidden');
+        }
+
+        document.getElementById('modal-detalhes').classList.remove('hidden');
+        document.getElementById('btn-fechar-detalhes').focus();
+
+        runServer('registrarAcesso', {
+          id: item.id,
+          titulo: item.titulo,
+          tema: item.tema,
+          tipo: item.tipo,
+          termoPesquisado: state.termoBusca,
+          origem: 'Modal de detalhes'
+        });
+      } catch (e) {
+        showError();
+      }
+    }
+
+    async function enviarFeedbackUsuario(resposta, comentario) {
+      const item = state.conteudoModalAtual;
+      if (!item) return;
+
+      try {
+        await runServer('registrarFeedback', {
+          id: item.id,
+          titulo: item.titulo,
+          resposta: resposta,
+          comentario: comentario || ''
+        });
+        document.getElementById('fb-comentario-area').classList.add('hidden');
+        const conf = document.getElementById('fb-confirmacao');
+        conf.textContent = 'Obrigado pela sua avaliação! Seu feedback foi registrado.';
+        conf.classList.remove('hidden');
+      } catch (e) {
+        showToast('Não foi possível registrar o feedback agora.');
+      }
+    }
+
+    // =========================================================================
+    // NAVEGAÇÃO ENTRE SEÇÕES
+    // =========================================================================
+    function navegarParaView(viewName) {
+      state.viewAtual = viewName;
+
+      document.querySelectorAll('.nav-link').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.view === viewName);
+      });
+
+      // Fecha menu mobile após clique
+      document.getElementById('main-nav').classList.remove('open');
+      document.getElementById('btn-mobile-menu').setAttribute('aria-expanded', 'false');
+
+      const viewsCatalogo = ['inicio', 'documentos', 'modelos', 'fluxos'];
+      document.getElementById('view-catalogo').classList.toggle('hidden', !viewsCatalogo.includes(viewName));
+      document.getElementById('view-temas').classList.toggle('hidden', viewName !== 'temas');
+      document.getElementById('view-faq').classList.toggle('hidden', viewName !== 'faq');
+      document.getElementById('view-sobre').classList.toggle('hidden', viewName !== 'sobre');
+      document.getElementById('view-contato').classList.toggle('hidden', viewName !== 'contato');
+
+      const adminView = document.getElementById('view-admin');
+      if (adminView) adminView.classList.toggle('hidden', viewName !== 'admin');
+
+      if (viewsCatalogo.includes(viewName)) {
+        state.filtros.apenasModelos = (viewName === 'modelos');
+        state.filtros.apenasFluxos = (viewName === 'fluxos');
+        executarBusca(1);
+      } else if (viewName === 'admin' && state.isAdmin) {
+        carregarPainelAdmin();
+      }
+    }
+
+    function limparTodosFiltros(recarregar) {
+      state.filtros = {
+        tema: '', subtema: '', publico: '', tipo: '',
+        responsavel: '', ano: '', destaque: false,
+        apenasModelos: state.viewAtual === 'modelos',
+        apenasFluxos: state.viewAtual === 'fluxos'
+      };
+      ['filtro-tema', 'filtro-subtema', 'filtro-publico', 'filtro-tipo', 'filtro-responsavel', 'filtro-ano']
+        .forEach(id => { document.getElementById(id).value = ''; });
+      document.getElementById('filtro-destaque').checked = false;
+
+      if (recarregar) executarBusca(1);
+    }
+
+    // =========================================================================
+    // ÁREA ADMINISTRATIVA
+    // =========================================================================
+    async function carregarPainelAdmin() {
+      setLoading(true);
+      try {
+        const dash = await runServer('getAdminDashboardData');
+        setLoading(false);
+
+        document.getElementById('kpi-total').textContent = dash.resumo.totalConteudos;
+        document.getElementById('kpi-publicados').textContent = dash.resumo.publicados;
+        document.getElementById('kpi-acessos').textContent = dash.resumo.totalAcessos;
+        document.getElementById('kpi-sem-resultado').textContent = dash.resumo.totalSemResultado;
+
+        state.adminConteudosCache = dash.conteudos || [];
+
+        // Tabela de conteúdos
+        document.getElementById('adm-tbody-conteudos').innerHTML = state.adminConteudosCache.map(c => `
+          <tr>
+            <td><strong>${escapeHtml(c.id)}</strong></td>
+            <td>${escapeHtml(c.titulo)}</td>
+            <td>${escapeHtml(c.tema)}</td>
+            <td>${escapeHtml(c.tipo)}</td>
+            <td>${escapeHtml(c.status)}</td>
+            <td>${c.destaque ? 'Sim' : 'Não'}</td>
+            <td style="white-space:nowrap;">
+              <button type="button" class="btn-link-sm js-adm-edit" data-id="${escapeHtml(c.id)}">Editar</button> |
+              <button type="button" class="btn-link-sm js-adm-destaque" data-id="${escapeHtml(c.id)}">Destaque</button> |
+              <button type="button" class="btn-link-sm js-adm-status" data-id="${escapeHtml(c.id)}" data-status="${escapeHtml(c.status)}">
+                ${c.status === 'Publicado' ? 'Ocultar' : 'Publicar'}
+              </button>
+            </td>
+          </tr>
+        `).join('');
+
+        // Eventos da tabela administrativa
+        document.querySelectorAll('.js-adm-edit').forEach(b => {
+          b.addEventListener('click', () => abrirModalAdminForm(b.dataset.id));
+        });
+        document.querySelectorAll('.js-adm-destaque').forEach(b => {
+          b.addEventListener('click', async () => {
+            await runServer('alternarDestaqueConteudo', b.dataset.id);
+            showToast('Destaque atualizado.');
+            carregarPainelAdmin();
+          });
+        });
+        document.querySelectorAll('.js-adm-status').forEach(b => {
+          b.addEventListener('click', async () => {
+            const proximo = b.dataset.status === 'Publicado' ? 'Arquivado' : 'Publicado';
+            if (!confirm('Confirma alterar o status para "' + proximo + '"?')) return;
+            await runServer('alterarStatusConteudo', b.dataset.id, proximo);
+            showToast('Status atualizado para ' + proximo + '.');
+            carregarPainelAdmin();
+          });
+        });
+
+        // Termos pesquisados
+        document.getElementById('adm-tbody-termos').innerHTML = (dash.topTermos || []).map(t => `
+          <tr><td>${escapeHtml(t.termo)}</td><td>${t.buscas}</td><td>${t.ultimoResultado}</td></tr>
+        `).join('');
+
+        // Pesquisas sem resultado
+        document.getElementById('adm-tbody-sem-resultado').innerHTML = (dash.pesquisasSemResultado || []).map(p => `
+          <tr><td>${escapeHtml(p.data)}</td><td>${escapeHtml(p.termo)}</td><td>${escapeHtml(p.filtros || '—')}</td></tr>
+        `).join('');
+
+        // Mais acessados
+        document.getElementById('adm-tbody-acessados').innerHTML = (dash.topAcessados || []).map(a => `
+          <tr><td>${escapeHtml(a.id)}</td><td>${escapeHtml(a.titulo)}</td><td>${escapeHtml(a.tema)}</td><td>${escapeHtml(a.tipo)}</td><td>${a.acessos}</td></tr>
+        `).join('');
+
+        // Feedbacks
+        document.getElementById('adm-tbody-feedback').innerHTML = (dash.feedbacks || []).map(f => `
+          <tr><td>${escapeHtml(f.data)}</td><td>${escapeHtml(f.titulo)}</td><td>${escapeHtml(f.resposta)}</td><td>${escapeHtml(f.comentario || '—')}</td></tr>
+        `).join('');
+
+        // Logs
+        document.getElementById('adm-tbody-logs').innerHTML = (dash.logs || []).map(l => `
+          <tr><td>${escapeHtml(l.data)}</td><td>${escapeHtml(l.nivel)}</td><td>${escapeHtml(l.origem)}</td><td>${escapeHtml(l.mensagem)}</td><td>${escapeHtml(l.detalhes)}</td></tr>
+        `).join('');
+      } catch (e) {
+        showError();
+      }
+    }
+
+    function abrirModalAdminForm(idEdit) {
+      const form = document.getElementById('form-admin-conteudo');
+      form.reset();
+      document.getElementById('adm-id').value = '';
+
+      if (idEdit) {
+        const item = state.adminConteudosCache.find(c => c.id === idEdit);
+        if (item) {
+          document.getElementById('modal-admin-titulo').textContent = 'Editar Conteúdo (' + item.id + ')';
+          document.getElementById('adm-id').value = item.id;
+          document.getElementById('adm-titulo').value = item.titulo;
+          document.getElementById('adm-tema').value = item.tema;
+          document.getElementById('adm-subtema').value = item.subtema;
+          document.getElementById('adm-tipo').value = item.tipo;
+          document.getElementById('adm-publico').value = item.publico;
+          document.getElementById('adm-responsavel').value = item.responsavel;
+          document.getElementById('adm-file-id').value = item.fileId;
+          document.getElementById('adm-url').value = item.url;
+          document.getElementById('adm-versao').value = item.versao;
+          document.getElementById('adm-status').value = item.status;
+          document.getElementById('adm-resumo').value = item.resumo;
+          document.getElementById('adm-objetivo').value = item.objetivo;
+          document.getElementById('adm-palavras').value = item.palavrasChave;
+          document.getElementById('adm-relacionados').value = item.relacionadosIds;
+          document.getElementById('adm-destaque').checked = item.destaque;
+        }
+      } else {
+        document.getElementById('modal-admin-titulo').textContent = 'Cadastrar Novo Conteúdo';
+      }
+
+      document.getElementById('modal-admin-form').classList.remove('hidden');
+    }
+
+    // =========================================================================
+    // ACESSIBILIDADE (WCAG 2.1 AA)
+    // =========================================================================
+    function restaurarPreferenciasAcessibilidade() {
+      const savedScale = parseFloat(localStorage.getItem('mg_font_scale'));
+      if (savedScale && savedScale >= 0.85 && savedScale <= 1.35) {
+        state.fontScale = savedScale;
+        document.documentElement.style.setProperty('--font-scale', state.fontScale);
+      }
+      if (localStorage.getItem('mg_high_contrast') === 'true') {
+        document.documentElement.setAttribute('data-contrast', 'high');
+        document.getElementById('btn-contrast').setAttribute('aria-pressed', 'true');
+      }
+    }
+
+    function alterarFonte(delta) {
+      state.fontScale = Math.min(1.35, Math.max(0.85, Number((state.fontScale + delta).toFixed(2))));
+      document.documentElement.style.setProperty('--font-scale', state.fontScale);
+      localStorage.setItem('mg_font_scale', String(state.fontScale));
+    }
+
+    // =========================================================================
+    // REGISTRO DE EVENTOS DA INTERFACE
+    // =========================================================================
+    function registrarEventos() {
+      // Acessibilidade
+      document.getElementById('btn-font-inc').addEventListener('click', () => alterarFonte(0.1));
+      document.getElementById('btn-font-dec').addEventListener('click', () => alterarFonte(-0.1));
+      document.getElementById('btn-font-reset').addEventListener('click', () => {
+        state.fontScale = 1;
+        document.documentElement.style.setProperty('--font-scale', '1');
+        localStorage.setItem('mg_font_scale', '1');
+      });
+      document.getElementById('btn-contrast').addEventListener('click', (e) => {
+        const isHigh = document.documentElement.getAttribute('data-contrast') === 'high';
+        if (isHigh) {
+          document.documentElement.removeAttribute('data-contrast');
+          e.currentTarget.setAttribute('aria-pressed', 'false');
+          localStorage.setItem('mg_high_contrast', 'false');
+        } else {
+          document.documentElement.setAttribute('data-contrast', 'high');
+          e.currentTarget.setAttribute('aria-pressed', 'true');
+          localStorage.setItem('mg_high_contrast', 'true');
+        }
+      });
+
+      // Menu mobile
+      document.getElementById('btn-mobile-menu').addEventListener('click', (e) => {
+        const nav = document.getElementById('main-nav');
+        const open = nav.classList.toggle('open');
+        e.currentTarget.setAttribute('aria-expanded', String(open));
+      });
+
+      // Navegação principal e links de view
+      document.querySelectorAll('[data-view]').forEach(el => {
+        el.addEventListener('click', () => navegarParaView(el.dataset.view));
+      });
+
+      // Formulário e campo de busca
+      const inputBusca = document.getElementById('input-busca');
+      const btnLimparBusca = document.getElementById('btn-limpar-busca');
+
+      inputBusca.addEventListener('input', () => {
+        state.termoBusca = inputBusca.value.trim();
+        btnLimparBusca.classList.toggle('hidden', !state.termoBusca);
+        if (state.termoBusca.length === 0 || state.termoBusca.length >= 2) {
+          agendarBusca(true);
+        }
+      });
+
+      document.getElementById('form-busca').addEventListener('submit', (e) => {
+        e.preventDefault();
+        state.termoBusca = inputBusca.value.trim();
+        if (!['inicio', 'documentos', 'modelos', 'fluxos'].includes(state.viewAtual)) {
+          navegarParaView('inicio');
+        } else {
+          executarBusca(1);
+        }
+      });
+
+      btnLimparBusca.addEventListener('click', () => {
+        inputBusca.value = '';
+        state.termoBusca = '';
+        btnLimparBusca.classList.add('hidden');
+        executarBusca(1);
+      });
+
+      // Chips de sugestão
+      document.querySelectorAll('.chip-suggestion').forEach(chip => {
+        chip.addEventListener('click', () => {
+          const q = chip.dataset.query;
+          inputBusca.value = q;
+          state.termoBusca = q;
+          btnLimparBusca.classList.remove('hidden');
+          if (!['inicio', 'documentos', 'modelos', 'fluxos'].includes(state.viewAtual)) {
+            navegarParaView('inicio');
+          } else {
+            executarBusca(1);
+          }
+        });
+      });
+
+      // Filtros combinados
+      const mapaSelects = {
+        'filtro-tema': 'tema',
+        'filtro-subtema': 'subtema',
+        'filtro-publico': 'publico',
+        'filtro-tipo': 'tipo',
+        'filtro-responsavel': 'responsavel',
+        'filtro-ano': 'ano'
+      };
+      Object.entries(mapaSelects).forEach(([elId, key]) => {
+        document.getElementById(elId).addEventListener('change', (e) => {
+          state.filtros[key] = e.target.value;
+          executarBusca(1);
+        });
+      });
+
+      document.getElementById('filtro-destaque').addEventListener('change', (e) => {
+        state.filtros.destaque = e.target.checked;
+        executarBusca(1);
+      });
+
+      document.getElementById('btn-limpar-filtros').addEventListener('click', () => limparTodosFiltros(true));
+
+      document.getElementById('btn-toggle-filters').addEventListener('click', (e) => {
+        const panel = document.getElementById('filters-panel');
+        const open = panel.classList.toggle('open');
+        e.currentTarget.setAttribute('aria-expanded', String(open));
+      });
+
+      document.getElementById('btn-tentar-novamente').addEventListener('click', () => executarBusca(state.paginaAtual));
+
+      // Modal Detalhes e Feedback
+      document.getElementById('btn-fechar-detalhes').addEventListener('click', () => {
+        document.getElementById('modal-detalhes').classList.add('hidden');
+      });
+
+      document.getElementById('det-btn-copiar-link').addEventListener('click', () => {
+        if (!state.conteudoModalAtual) return;
+        navigator.clipboard.writeText(state.conteudoModalAtual.url).then(() => {
+          showToast('Link do documento copiado para a área de transferência!');
+        });
+      });
+
+      document.getElementById('btn-fb-sim').addEventListener('click', () => enviarFeedbackUsuario('Sim', ''));
+      document.getElementById('btn-fb-nao').addEventListener('click', () => {
+        document.getElementById('fb-comentario-area').classList.remove('hidden');
+        document.getElementById('fb-comentario-texto').focus();
+      });
+      document.getElementById('btn-fb-enviar-nao').addEventListener('click', () => {
+        const comentario = document.getElementById('fb-comentario-texto').value;
+        enviarFeedbackUsuario('Não', comentario);
+      });
+
+      // Fechar modais com tecla ESC
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          document.getElementById('modal-detalhes').classList.add('hidden');
+          const admModal = document.getElementById('modal-admin-form');
+          if (admModal) admModal.classList.add('hidden');
+        }
+      });
+
+      // Eventos exclusivos Admin
+      if (state.isAdmin) {
+        document.getElementById('btn-adm-atualizar-drive').addEventListener('click', async () => {
+          if (!confirm('Deseja sincronizar agora o catálogo com a pasta do Google Drive?')) return;
+          setLoading(true);
+          try {
+            const res = await runServer('atualizarIndiceDoDrive');
+            setLoading(false);
+            showToast(`Índice atualizado! Novos: ${res.stats.novos}, Atualizados: ${res.stats.atualizados}, Arquivados: ${res.stats.arquivados}`);
+            carregarPainelAdmin();
+          } catch (e) {
+            showError();
+          }
+        });
+
+        document.getElementById('btn-adm-limpar-cache').addEventListener('click', async () => {
+          await runServer('limparCache');
+          showToast('Cache do portal limpo com sucesso!');
+        });
+
+        document.getElementById('btn-adm-exportar-csv').addEventListener('click', async () => {
+          const csv = await runServer('exportarRelatorioUsoCsv');
+          const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'relatorio_manual_gestao_seduc.csv';
+          a.click();
+          URL.revokeObjectURL(url);
+        });
+
+        document.getElementById('btn-adm-novo-conteudo').addEventListener('click', () => abrirModalAdminForm(null));
+        document.getElementById('btn-fechar-admin-form').addEventListener('click', () => {
+          document.getElementById('modal-admin-form').classList.add('hidden');
+        });
+        document.getElementById('btn-cancelar-admin-form').addEventListener('click', () => {
+          document.getElementById('modal-admin-form').classList.add('hidden');
+        });
+
+        document.getElementById('form-admin-conteudo').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const payload = {
+            id: document.getElementById('adm-id').value,
+            titulo: document.getElementById('adm-titulo').value,
+            tema: document.getElementById('adm-tema').value,
+            subtema: document.getElementById('adm-subtema').value,
+            tipo: document.getElementById('adm-tipo').value,
+            publico: document.getElementById('adm-publico').value,
+            responsavel: document.getElementById('adm-responsavel').value,
+            fileId: document.getElementById('adm-file-id').value,
+            url: document.getElementById('adm-url').value,
+            versao: document.getElementById('adm-versao').value,
+            status: document.getElementById('adm-status').value,
+            resumo: document.getElementById('adm-resumo').value,
+            objetivo: document.getElementById('adm-objetivo').value,
+            palavrasChave: document.getElementById('adm-palavras').value,
+            relacionadosIds: document.getElementById('adm-relacionados').value,
+            destaque: document.getElementById('adm-destaque').checked
+          };
+          await runServer('salvarConteudoAdmin', payload);
+          document.getElementById('modal-admin-form').classList.add('hidden');
+          showToast('Conteúdo salvo no catálogo!');
+          carregarPainelAdmin();
+        });
+
+        document.querySelectorAll('.admin-tab-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            document.querySelectorAll('.admin-tab-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            document.querySelectorAll('.admin-tab-panel').forEach(p => p.classList.add('hidden'));
+            document.getElementById('admtab-' + btn.dataset.admtab).classList.remove('hidden');
+          });
+        });
+      }
+    }
+  })();
+</script>

@@ -1,0 +1,113 @@
+<section id="view-admin" class="app-view hidden" aria-label="Painel Administrativo">
+  <div class="section-header-row">
+    <div>
+      <h2 class="section-title">Administração do Manual de Gestão</h2>
+      <p class="section-desc">Gestão do índice documental, métricas de uso e curadoria de conteúdos.</p>
+    </div>
+  </div>
+
+  <!-- Ações Administrativas -->
+  <div class="admin-actions-bar">
+    <button type="button" class="btn-primary" id="btn-adm-atualizar-drive">Atualizar índice do Drive</button>
+    <button type="button" class="btn-secondary" id="btn-adm-novo-conteudo">+ Cadastrar conteúdo</button>
+    <button type="button" class="btn-secondary" id="btn-adm-limpar-cache">Limpar cache</button>
+    <button type="button" class="btn-success" id="btn-adm-exportar-csv">Exportar relatório de uso (CSV)</button>
+  </div>
+
+  <!-- Indicadores Resumidos -->
+  <div class="admin-kpis">
+    <div class="kpi-card">
+      <span class="kpi-value" id="kpi-total">0</span>
+      <span>Total no catálogo</span>
+    </div>
+    <div class="kpi-card">
+      <span class="kpi-value" id="kpi-publicados">0</span>
+      <span>Publicados</span>
+    </div>
+    <div class="kpi-card">
+      <span class="kpi-value" id="kpi-acessos">0</span>
+      <span>Acessos registrados</span>
+    </div>
+    <div class="kpi-card">
+      <span class="kpi-value" id="kpi-sem-resultado">0</span>
+      <span>Buscas sem resultado</span>
+    </div>
+  </div>
+
+  <!-- Sub-abas Administrativas -->
+  <div class="admin-actions-bar" role="tablist" aria-label="Seções administrativas">
+    <button type="button" class="btn-secondary admin-tab-btn active" data-admtab="conteudos">Gerenciar Conteúdos</button>
+    <button type="button" class="btn-secondary admin-tab-btn" data-admtab="termos">Termos e Sem Resultado</button>
+    <button type="button" class="btn-secondary admin-tab-btn" data-admtab="acessados">Mais Acessados & Feedback</button>
+    <button type="button" class="btn-secondary admin-tab-btn" data-admtab="logs">Logs de Indexação</button>
+  </div>
+
+  <!-- Painel: Gerenciar Conteúdos -->
+  <div id="admtab-conteudos" class="admin-tab-panel">
+    <div class="table-responsive">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Título</th>
+            <th>Tema</th>
+            <th>Tipo</th>
+            <th>Status</th>
+            <th>Destaque</th>
+            <th>Ações</th>
+          </tr>
+        </thead>
+        <tbody id="adm-tbody-conteudos"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Painel: Termos Pesquisados & Pesquisas sem Resultado -->
+  <div id="admtab-termos" class="admin-tab-panel hidden">
+    <h3>Termos Mais Pesquisados</h3>
+    <div class="table-responsive">
+      <table class="data-table">
+        <thead><tr><th>Termo</th><th>Total de Buscas</th><th>Última Qtd. Resultados</th></tr></thead>
+        <tbody id="adm-tbody-termos"></tbody>
+      </table>
+    </div>
+
+    <h3>Pesquisas Sem Resultado (Oportunidades de Novos Conteúdos)</h3>
+    <div class="table-responsive">
+      <table class="data-table">
+        <thead><tr><th>Data/Hora</th><th>Termo Pesquisado</th><th>Filtros Utilizados</th></tr></thead>
+        <tbody id="adm-tbody-sem-resultado"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Painel: Mais Acessados & Feedbacks -->
+  <div id="admtab-acessados" class="admin-tab-panel hidden">
+    <h3>Conteúdos Mais Acessados</h3>
+    <div class="table-responsive">
+      <table class="data-table">
+        <thead><tr><th>ID</th><th>Título</th><th>Tema</th><th>Tipo</th><th>Acessos</th></tr></thead>
+        <tbody id="adm-tbody-acessados"></tbody>
+      </table>
+    </div>
+
+    <h3>Feedbacks Recentes</h3>
+    <div class="table-responsive">
+      <table class="data-table">
+        <thead><tr><th>Data/Hora</th><th>Conteúdo</th><th>Útil?</th><th>Comentário</th></tr></thead>
+        <tbody id="adm-tbody-feedback"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Painel: Logs de Indexação e Erros -->
+  <div id="admtab-logs" class="admin-tab-panel hidden">
+    <h3>Registros de Execução e Erros</h3>
+    <div class="table-responsive">
+      <table class="data-table">
+        <thead><tr><th>Data/Hora</th><th>Nível</th><th>Origem</th><th>Mensagem</th><th>Detalhes</th></tr></thead>
+        <tbody id="adm-tbody-logs"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
