@@ -307,6 +307,44 @@
     </div>
   </footer>
 
+<!-- Botão Flutuante e Painel do Assistente Conversacional (Gemini RAG) -->
+  <button type="button" id="btn-abrir-chat" class="chat-fab" aria-label="Abrir Assistente Conversacional do Manual">
+    <span aria-hidden="true">✦</span> Assistente do Manual
+  </button>
+
+  <aside id="chat-drawer" class="chat-drawer hidden" role="dialog" aria-modal="false" aria-labelledby="chat-drawer-title">
+    <div class="chat-header">
+      <div>
+        <strong id="chat-drawer-title" style="display:block;font-size:1rem;">Assistente do Manual</strong>
+        <span style="font-size:0.76rem;opacity:0.9;">Respostas baseadas nos documentos oficiais COEGD</span>
+      </div>
+      <div style="display:flex;gap:6px;">
+        <button type="button" id="btn-limpar-chat" class="chat-header-btn" title="Nova conversa" aria-label="Limpar conversa">Limpar</button>
+        <button type="button" id="btn-fechar-chat" class="chat-header-btn" title="Fechar assistente" aria-label="Fechar assistente">✕</button>
+      </div>
+    </div>
+
+    <div id="chat-messages" class="chat-messages" aria-live="polite">
+      <div class="chat-msg chat-msg-bot">
+        Olá! Sou o assistente do <strong>Manual de Gestão da Tecnologia</strong>. Pergunte sobre fluxos, critérios de priorização, visitas às escolas, inventário ou atribuições de SEINTEC e SETEC.
+      </div>
+    </div>
+
+    <form id="form-chat-rag" class="chat-input-form">
+      <label for="input-chat-pergunta" class="sr-only">Digite sua dúvida sobre o Manual de Gestão</label>
+      <input
+        type="text"
+        id="input-chat-pergunta"
+        class="chat-input"
+        placeholder="Ex.: Como classificar demandas P1 a P4?"
+        maxlength="500"
+        autocomplete="off"
+        required
+      >
+      <button type="submit" id="btn-enviar-chat" class="btn-primary chat-send-btn">Enviar</button>
+    </form>
+  </aside>
+
   <!-- Modais e Notificações -->
   <?!= include('Components'); ?>
 

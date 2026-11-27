@@ -1,0 +1,378 @@
+/**
+ * ============================================================================
+ * GeminiService.gs - Assistente Conversacional com RAG Institucional
+ * Portal: Manual de Gestão da Tecnologia — SEDUC
+ * ============================================================================
+ */
+
+const GEMINI_MODELS_PRIORIDADE = [
+  'gemini-4-hydrogen',
+  'gemini-4-neon',
+  'gemini-3-flash-preview',
+  'gemini-3.8-flash'
+];
+
+const MAX_DOCS_CONTEXTO = 3;
+const MAX_CHARS_POR_DOC = 4500;
+
+function limparTextoSeguro_(texto, maxLen) {
+  if (typeof sanitizarEntradaTexto_ === 'function') {
+    return sanitizarEntradaTexto_(texto, maxLen);
+  }
+  return String(texto || '')
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .trim()
+    .substring(0, maxLen || 600);
+}
+
+function normalizarTextoSeguro_(texto) {
+  if (typeof normalizarTexto === 'function') {
+    return normalizarTexto(texto);
+  }
+  return String(texto || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+}
+
+function logErroSeguro_(origem, msg, detalhes) {
+  Logger.log('[ERRO ' + origem + '] ' + msg + ' | ' + (detalhes || ''));
+  if (typeof registrarLogErro === 'function') {
+    try {
+      registrarLogErro(origem, msg, detalhes);
+    } catch (e) {}
+  }
+}
+
+/**
+ * Ponto de entrada chamado pelo frontend (google.script.run).
+ */
+function perguntarAoAssistente(pergunta, historico) {
+  const perguntaLimpa = limparTextoSeguro_(pergunta, 600);
+  if (!perguntaLimpa || perguntaLimpa.length < 3) {
+    return {
+      sucesso: false,
+      mensagem: 'Digite uma pergunta com pelo menos 3 caracteres.'
+    };
+  }
+
+  try {
+    // 1. Recuperação (Retrieval)
+    const docsRelevantes = recuperarDocumentosParaRag_(perguntaLimpa, historico);
+
+    // 2. Montagem do Contexto (Augmentation)
+    const contextoTextual = montarBlocoContexto_(docsRelevantes);
+    const instrucaoSistema = obterInstrucaoSistemaRag_();
+    const contentsPayload = montarPayloadConversa_(perguntaLimpa, historico, contextoTextual);
+
+    const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
+    let textoResposta = '';
+    let modeloUtilizado = 'local-fallback';
+
+    // 3. Geração (Generation)
+    if (apiKey && apiKey.trim()) {
+      const resultadoIA = chamarGeminiComFallback_(apiKey.trim(), instrucaoSistema, contentsPayload);
+      if (resultadoIA && resultadoIA.texto) {
+        textoResposta = resultadoIA.texto;
+        modeloUtilizado = resultadoIA.modelo;
+      }
+    }
+
+    // 4. Contingência local caso os modelos externos retornem cota/erro
+    if (!textoResposta) {
+      textoResposta = gerarRespostaExtrativaLocal_(perguntaLimpa, docsRelevantes);
+    }
+
+    if (typeof registrarPesquisa === 'function') {
+      try {
+        registrarPesquisa({
+          termo: '[IA:' + modeloUtilizado + '] ' + perguntaLimpa,
+          quantidade: docsRelevantes.length,
+          filtros: { origem: 'Assistente RAG' }
+        });
+      } catch (eLog) {}
+    }
+
+    return {
+      sucesso: true,
+      modelo: modeloUtilizado,
+      resposta: textoResposta.trim(),
+      fontes: docsRelevantes.map(d => ({
+        id: d.id,
+        titulo: d.titulo,
+        tema: d.tema,
+        tipo: d.tipo,
+        url: d.url
+      }))
+    };
+
+  } catch (erro) {
+    logErroSeguro_('perguntarAoAssistente', erro.message, erro.stack);
+    return {
+      sucesso: false,
+      mensagem: erro.message || 'Erro ao consultar o assistente institucional.'
+    };
+  }
+}
+
+function chamarGeminiComFallback_(apiKey, instrucaoSistema, contentsPayload) {
+  const payload = {
+    systemInstruction: {
+      parts: [{ text: instrucaoSistema }]
+    },
+    contents: contentsPayload,
+    generationConfig: {
+      temperature: 0.2,
+      topP: 0.85,
+      maxOutputTokens: 1200
+    }
+  };
+
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+
+  const errosAcumulados = [];
+
+  for (let i = 0; i < GEMINI_MODELS_PRIORIDADE.length; i++) {
+    const modelo = GEMINI_MODELS_PRIORIDADE[i];
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
+      modelo + ':generateContent?key=' + encodeURIComponent(apiKey);
+
+    try {
+      const response = UrlFetchApp.fetch(url, options);
+      const statusCode = response.getResponseCode();
+      const responseText = response.getContentText();
+
+      if (statusCode === 200) {
+        const json = JSON.parse(responseText);
+        const texto = json &&
+          json.candidates &&
+          json.candidates[0] &&
+          json.candidates[0].content &&
+          json.candidates[0].content.parts &&
+          json.candidates[0].content.parts[0] &&
+          json.candidates[0].content.parts[0].text;
+
+        if (texto && texto.trim()) {
+          return { texto: texto.trim(), modelo: modelo };
+        }
+      }
+
+      errosAcumulados.push(modelo + ' -> HTTP ' + statusCode + ': ' + responseText.substring(0, 160));
+    } catch (e) {
+      errosAcumulados.push(modelo + ' -> Err: ' + e.message);
+    }
+  }
+
+  logErroSeguro_('chamarGeminiComFallback_', 'Falha nos modelos prioritários', errosAcumulados.join(' | ').substring(0, 900));
+  return null;
+}
+
+function gerarRespostaExtrativaLocal_(pergunta, docs) {
+  if (!docs || docs.length === 0) {
+    return 'Não localizei documentos específicos sobre esse tema no catálogo do Manual de Gestão.';
+  }
+
+  const tokens = normalizarTextoSeguro_(pergunta)
+    .split(/\s+/)
+    .filter(t => t.length >= 2);
+
+  const blocos = docs.map(doc => {
+    let trechoRelevante = '';
+
+    if (doc.textoIndexado && doc.textoIndexado.trim().length > 20) {
+      const segmentos = doc.textoIndexado
+        .split(/[\n\r]+|(?<=[.!?])\s+/)
+        .map(p => p.trim())
+        .filter(p => p.length >= 30 && p.length <= 600);
+
+      let melhorTrecho = '';
+      let maiorPontos = 0;
+
+      segmentos.forEach(seg => {
+        const normSeg = normalizarTextoSeguro_(seg);
+        let pontos = 0;
+        tokens.forEach(t => {
+          if (normSeg.indexOf(t) !== -1) pontos++;
+        });
+        if (pontos > maiorPontos) {
+          maiorPontos = pontos;
+          melhorTrecho = seg;
+        }
+      });
+
+      trechoRelevante = melhorTrecho || doc.textoIndexado.substring(0, 350) + '...';
+    } else {
+      trechoRelevante = (doc.resumo || '') + ' *(Conteúdo interno ainda não indexado na Coluna Q da planilha).*';
+    }
+
+    return `• **[${doc.titulo}]**: ${trechoRelevante}`;
+  });
+
+  return [
+    '*(Modo de consulta rápida — o modelo de IA está temporariamente indisponível)*',
+    '',
+    blocos.join('\n\n')
+  ].join('\n');
+}
+
+function recuperarDocumentosParaRag_(pergunta, historico) {
+  let todos = [];
+  if (typeof carregarTodosRegistros_ === 'function') {
+    todos = carregarTodosRegistros_(false) || [];
+  } else {
+    const ss = obterPlanilhaCatalogo_();
+    const sheet = ss.getSheetByName('CONTEUDOS');
+    if (sheet && sheet.getLastRow() >= 2) {
+      const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 19).getValues();
+      todos = rows
+        .filter(r => String(r[10] || '').trim() === 'Publicado')
+        .map(r => ({
+          id: String(r[0] || ''),
+          titulo: String(r[1] || ''),
+          resumo: String(r[2] || ''),
+          tema: String(r[3] || ''),
+          subtema: String(r[4] || ''),
+          publico: String(r[5] || ''),
+          tipo: String(r[6] || ''),
+          palavrasChave: String(r[7] || ''),
+          url: String(r[9] || ''),
+          destaque: String(r[14] || '').toLowerCase() === 'sim',
+          ordem: Number(r[15] || 999),
+          textoIndexado: String(r[16] || '')
+        }));
+    }
+  }
+
+  if (todos.length === 0) return [];
+
+  let textoConsulta = pergunta;
+  if (Array.isArray(historico) && historico.length > 0) {
+    const ultimasUser = historico
+      .filter(m => m && m.role === 'user' && m.text)
+      .slice(-1)
+      .map(m => m.text);
+    if (ultimasUser.length > 0) {
+      textoConsulta = ultimasUser[0] + ' ' + pergunta;
+    }
+  }
+
+  const stopwords = new Set([
+    'como', 'para', 'qual', 'quais', 'onde', 'quando', 'quem', 'sobre',
+    'fazer', 'realizar', 'preciso', 'quero', 'saber', 'pode', 'devo',
+    'pelo', 'pela', 'dos', 'das', 'nos', 'nas', 'uma', 'uns', 'umas', 'que', 'com', 'por'
+  ]);
+
+  const tokens = normalizarTextoSeguro_(textoConsulta)
+    .split(/\s+/)
+    .filter(t => t.length >= 2 && !stopwords.has(t));
+
+  const tokensFinais = tokens.length > 0
+    ? tokens
+    : normalizarTextoSeguro_(pergunta).split(/\s+/).filter(t => t.length >= 2);
+
+  if (tokensFinais.length === 0) {
+    return todos.slice(0, MAX_DOCS_CONTEXTO);
+  }
+
+  const ranqueados = [];
+  todos.forEach(item => {
+    let score = 0;
+    if (typeof calcularRelevancia === 'function') {
+      score = calcularRelevancia(item, tokensFinais);
+    } else {
+      const alvo = normalizarTextoSeguro_([item.titulo, item.tema, item.resumo, item.palavrasChave, item.textoIndexado].join(' '));
+      tokensFinais.forEach(t => {
+        if (alvo.includes(t)) score += 3;
+      });
+    }
+
+    if (score > 0 && item.textoIndexado && item.textoIndexado.length > 100) {
+      score += 5;
+    }
+    if (score > 0) {
+      ranqueados.push({ item: item, score: score });
+    }
+  });
+
+  ranqueados.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if (a.item.destaque !== b.item.destaque) return a.item.destaque ? -1 : 1;
+    return a.item.ordem - b.item.ordem;
+  });
+
+  return ranqueados.slice(0, MAX_DOCS_CONTEXTO).map(r => r.item);
+}
+
+function montarBlocoContexto_(docs) {
+  if (!docs || docs.length === 0) {
+    return 'NENHUM DOCUMENTO LOCALIZADO NO CATÁLOGO PARA ESTA CONSULTA.';
+  }
+
+  return docs.map((d, idx) => {
+    const conteudo = d.textoIndexado
+      ? d.textoIndexado.substring(0, MAX_CHARS_POR_DOC)
+      : '(Conteúdo textual integral não extraído; utilize o resumo e metadados acima.)';
+
+    return [
+      `=== DOCUMENTO ${idx + 1} ===`,
+      `Título: ${d.titulo}`,
+      `Tema: ${d.tema} | Tipo: ${d.tipo} | Público: ${d.publico}`,
+      `Resumo: ${d.resumo}`,
+      `Conteúdo Indexado: ${conteudo}`
+    ].join('\n');
+  }).join('\n\n');
+}
+
+function obterInstrucaoSistemaRag_() {
+  return [
+    'Você é o Assistente Institucional do Manual de Gestão da Tecnologia da SEDUC-SP (COEGD).',
+    'Responda EXCLUSIVAMENTE com base nos DOCUMENTOS OFICIAIS fornecidos no contexto.',
+    'Nunca invente procedimentos, prazos ou regras que não estejam nos documentos.',
+    'Se os documentos não trouxerem a resposta específica, informe isso claramente e sugira consultar os arquivos listados ou a COEGD.',
+    'Use listas numeradas para etapas/fluxos, tópicos em negrito para critérios e cite o título do documento entre colchetes, ex.: [Planejamento Anual].'
+  ].join('\n');
+}
+
+function montarPayloadConversa_(perguntaAtual, historico, contextoTextual) {
+  const contents = [];
+
+  if (Array.isArray(historico)) {
+    historico.slice(-4).forEach(msg => {
+      if (!msg || !msg.text) return;
+      const role = msg.role === 'model' ? 'model' : 'user';
+      contents.push({
+        role: role,
+        parts: [{ text: limparTextoSeguro_(msg.text, 1200) }]
+      });
+    });
+  }
+
+  const promptFinalUsuario = [
+    'CONTEXTO OFICIAL DO MANUAL DE GESTÃO:',
+    contextoTextual,
+    '',
+    'PERGUNTA DO USUÁRIO:',
+    perguntaAtual
+  ].join('\n');
+
+  contents.push({
+    role: 'user',
+    parts: [{ text: promptFinalUsuario }]
+  });
+
+  return contents;
+}
+
+/**
+ * Função de diagnóstico completo pelo editor do Apps Script.
+ */
+function testarConexaoGemini() {
+  const res = perguntarAoAssistente('como classificar as demandas de p1 a p4?', []);
+  Logger.log('Resultado completo: ' + JSON.stringify(res));
+}

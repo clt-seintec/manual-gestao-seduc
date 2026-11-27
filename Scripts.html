@@ -23,6 +23,7 @@
       faqs: [],
       conteudoModalAtual: null,
       adminConteudosCache: [],
+      chatHistorico: [],
       fontScale: 1
     };
 
@@ -237,7 +238,6 @@
         `;
       }).join('');
 
-      // Eventos dos cartões
       grid.querySelectorAll('.js-acessar-direto').forEach(link => {
         link.addEventListener('click', () => {
           const item = data.resultados.find(r => r.id === link.dataset.id);
@@ -422,12 +422,10 @@
         btnCopiarDrive.href = item.urlCopiar || item.url;
         btnDownload.href = item.urlDownload || item.url;
 
-        // Reseta widget de feedback
         document.getElementById('fb-comentario-area').classList.add('hidden');
         document.getElementById('fb-comentario-texto').value = '';
         document.getElementById('fb-confirmacao').classList.add('hidden');
 
-        // Materiais relacionados
         const relSec = document.getElementById('det-relacionados-section');
         const relList = document.getElementById('det-relacionados-list');
         if (item.relacionados && item.relacionados.length > 0) {
@@ -491,7 +489,6 @@
         btn.classList.toggle('active', btn.dataset.view === viewName);
       });
 
-      // Fecha menu mobile após clique
       document.getElementById('main-nav').classList.remove('open');
       document.getElementById('btn-mobile-menu').setAttribute('aria-expanded', 'false');
 
@@ -544,7 +541,6 @@
 
         state.adminConteudosCache = dash.conteudos || [];
 
-        // Tabela de conteúdos
         document.getElementById('adm-tbody-conteudos').innerHTML = state.adminConteudosCache.map(c => `
           <tr>
             <td><strong>${escapeHtml(c.id)}</strong></td>
@@ -563,7 +559,6 @@
           </tr>
         `).join('');
 
-        // Eventos da tabela administrativa
         document.querySelectorAll('.js-adm-edit').forEach(b => {
           b.addEventListener('click', () => abrirModalAdminForm(b.dataset.id));
         });
@@ -584,27 +579,22 @@
           });
         });
 
-        // Termos pesquisados
         document.getElementById('adm-tbody-termos').innerHTML = (dash.topTermos || []).map(t => `
           <tr><td>${escapeHtml(t.termo)}</td><td>${t.buscas}</td><td>${t.ultimoResultado}</td></tr>
         `).join('');
 
-        // Pesquisas sem resultado
         document.getElementById('adm-tbody-sem-resultado').innerHTML = (dash.pesquisasSemResultado || []).map(p => `
           <tr><td>${escapeHtml(p.data)}</td><td>${escapeHtml(p.termo)}</td><td>${escapeHtml(p.filtros || '—')}</td></tr>
         `).join('');
 
-        // Mais acessados
         document.getElementById('adm-tbody-acessados').innerHTML = (dash.topAcessados || []).map(a => `
           <tr><td>${escapeHtml(a.id)}</td><td>${escapeHtml(a.titulo)}</td><td>${escapeHtml(a.tema)}</td><td>${escapeHtml(a.tipo)}</td><td>${a.acessos}</td></tr>
         `).join('');
 
-        // Feedbacks
         document.getElementById('adm-tbody-feedback').innerHTML = (dash.feedbacks || []).map(f => `
           <tr><td>${escapeHtml(f.data)}</td><td>${escapeHtml(f.titulo)}</td><td>${escapeHtml(f.resposta)}</td><td>${escapeHtml(f.comentario || '—')}</td></tr>
         `).join('');
 
-        // Logs
         document.getElementById('adm-tbody-logs').innerHTML = (dash.logs || []).map(l => `
           <tr><td>${escapeHtml(l.data)}</td><td>${escapeHtml(l.nivel)}</td><td>${escapeHtml(l.origem)}</td><td>${escapeHtml(l.mensagem)}</td><td>${escapeHtml(l.detalhes)}</td></tr>
         `).join('');
@@ -801,89 +791,179 @@
         enviarFeedbackUsuario('Não', comentario);
       });
 
-      // Fechar modais com tecla ESC
+      // Fechar modais e chat com tecla ESC
       document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
           document.getElementById('modal-detalhes').classList.add('hidden');
           const admModal = document.getElementById('modal-admin-form');
           if (admModal) admModal.classList.add('hidden');
+          const chatEl = document.getElementById('chat-drawer');
+          if (chatEl) chatEl.classList.add('hidden');
         }
       });
 
-      // Eventos exclusivos Admin
-      if (state.isAdmin) {
-        document.getElementById('btn-adm-atualizar-drive').addEventListener('click', async () => {
-          if (!confirm('Deseja sincronizar agora o catálogo com a pasta do Google Drive?')) return;
-          setLoading(true);
-          try {
-            const res = await runServer('atualizarIndiceDoDrive');
-            setLoading(false);
-            showToast(`Índice atualizado! Novos: ${res.stats.novos}, Atualizados: ${res.stats.atualizados}, Arquivados: ${res.stats.arquivados}`);
-            carregarPainelAdmin();
-          } catch (e) {
-            showError();
-          }
-        });
+      // Eventos exclusivos Admin (delegação global no document)
+  document.addEventListener('click', async (e) => {
+    const target = e.target.closest('button');
+    if (!target) return;
 
-        document.getElementById('btn-adm-limpar-cache').addEventListener('click', async () => {
-          await runServer('limparCache');
-          showToast('Cache do portal limpo com sucesso!');
-        });
-
-        document.getElementById('btn-adm-exportar-csv').addEventListener('click', async () => {
-          const csv = await runServer('exportarRelatorioUsoCsv');
-          const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = 'relatorio_manual_gestao_seduc.csv';
-          a.click();
-          URL.revokeObjectURL(url);
-        });
-
-        document.getElementById('btn-adm-novo-conteudo').addEventListener('click', () => abrirModalAdminForm(null));
-        document.getElementById('btn-fechar-admin-form').addEventListener('click', () => {
-          document.getElementById('modal-admin-form').classList.add('hidden');
-        });
-        document.getElementById('btn-cancelar-admin-form').addEventListener('click', () => {
-          document.getElementById('modal-admin-form').classList.add('hidden');
-        });
-
-        document.getElementById('form-admin-conteudo').addEventListener('submit', async (e) => {
-          e.preventDefault();
-          const payload = {
-            id: document.getElementById('adm-id').value,
-            titulo: document.getElementById('adm-titulo').value,
-            tema: document.getElementById('adm-tema').value,
-            subtema: document.getElementById('adm-subtema').value,
-            tipo: document.getElementById('adm-tipo').value,
-            publico: document.getElementById('adm-publico').value,
-            responsavel: document.getElementById('adm-responsavel').value,
-            fileId: document.getElementById('adm-file-id').value,
-            url: document.getElementById('adm-url').value,
-            versao: document.getElementById('adm-versao').value,
-            status: document.getElementById('adm-status').value,
-            resumo: document.getElementById('adm-resumo').value,
-            objetivo: document.getElementById('adm-objetivo').value,
-            palavrasChave: document.getElementById('adm-palavras').value,
-            relacionadosIds: document.getElementById('adm-relacionados').value,
-            destaque: document.getElementById('adm-destaque').checked
-          };
-          await runServer('salvarConteudoAdmin', payload);
-          document.getElementById('modal-admin-form').classList.add('hidden');
-          showToast('Conteúdo salvo no catálogo!');
-          carregarPainelAdmin();
-        });
-
-        document.querySelectorAll('.admin-tab-btn').forEach(btn => {
-          btn.addEventListener('click', () => {
-            document.querySelectorAll('.admin-tab-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            document.querySelectorAll('.admin-tab-panel').forEach(p => p.classList.add('hidden'));
-            document.getElementById('admtab-' + btn.dataset.admtab).classList.remove('hidden');
-          });
-        });
+    if (target.id === 'btn-adm-atualizar-drive') {
+      if (!confirm('Deseja sincronizar agora o catálogo com a pasta do Google Drive?')) return;
+      setLoading(true);
+      try {
+        const res = await runServer('atualizarIndiceDoDrive');
+        setLoading(false);
+        showToast(`Índice atualizado! Novos: ${res.stats.novos}, Atualizados: ${res.stats.atualizados}, Arquivados: ${res.stats.arquivados}`);
+        carregarPainelAdmin();
+      } catch (err) {
+        showError();
       }
+    } else if (target.id === 'btn-adm-limpar-cache') {
+      await runServer('limparCache');
+      showToast('Cache do portal limpo com sucesso!');
+    } else if (target.id === 'btn-adm-exportar-csv') {
+      const csv = await runServer('exportarRelatorioUsoCsv');
+      const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'relatorio_manual_gestao_seduc.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    } else if (target.id === 'btn-adm-novo-conteudo') {
+      abrirModalAdminForm(null);
+    } else if (target.id === 'btn-fechar-admin-form' || target.id === 'btn-cancelar-admin-form') {
+      const modal = document.getElementById('modal-admin-form');
+      if (modal) modal.classList.add('hidden');
+    } else if (target.classList.contains('admin-tab-btn')) {
+      document.querySelectorAll('.admin-tab-btn').forEach(b => b.classList.remove('active'));
+      target.classList.add('active');
+      document.querySelectorAll('.admin-tab-panel').forEach(p => p.classList.add('hidden'));
+      const painel = document.getElementById('admtab-' + target.dataset.admtab);
+      if (painel) painel.classList.remove('hidden');
+    }
+  });
+
+  document.addEventListener('submit', async (e) => {
+    if (e.target && e.target.id === 'form-admin-conteudo') {
+      e.preventDefault();
+      const payload = {
+        id: document.getElementById('adm-id').value,
+        titulo: document.getElementById('adm-titulo').value,
+        tema: document.getElementById('adm-tema').value,
+        subtema: document.getElementById('adm-subtema').value,
+        tipo: document.getElementById('adm-tipo').value,
+        publico: document.getElementById('adm-publico').value,
+        responsavel: document.getElementById('adm-responsavel').value,
+        fileId: document.getElementById('adm-file-id').value,
+        url: document.getElementById('adm-url').value,
+        versao: document.getElementById('adm-versao').value,
+        status: document.getElementById('adm-status').value,
+        resumo: document.getElementById('adm-resumo').value,
+        objetivo: document.getElementById('adm-objetivo').value,
+        palavrasChave: document.getElementById('adm-palavras').value,
+        relacionadosIds: document.getElementById('adm-relacionados').value,
+        destaque: document.getElementById('adm-destaque').checked
+      };
+      await runServer('salvarConteudoAdmin', payload);
+      document.getElementById('modal-admin-form').classList.add('hidden');
+      showToast('Conteúdo salvo no catálogo!');
+      carregarPainelAdmin();
+    }
+  });
+      // =======================================================================
+      // EVENTOS DO ASSISTENTE CONVERSACIONAL (GEMINI RAG)
+      // =======================================================================
+      const chatDrawer = document.getElementById('chat-drawer');
+      const chatMessages = document.getElementById('chat-messages');
+      const inputChat = document.getElementById('input-chat-pergunta');
+      const btnEnviarChat = document.getElementById('btn-enviar-chat');
+
+      document.getElementById('btn-abrir-chat').addEventListener('click', () => {
+        const abriu = !chatDrawer.classList.toggle('hidden');
+        if (abriu) inputChat.focus();
+      });
+
+      document.getElementById('btn-fechar-chat').addEventListener('click', () => {
+        chatDrawer.classList.add('hidden');
+      });
+
+      document.getElementById('btn-limpar-chat').addEventListener('click', () => {
+        state.chatHistorico = [];
+        chatMessages.innerHTML = `
+          <div class="chat-msg chat-msg-bot">
+            Conversa reiniciada. Como posso ajudar na consulta ao Manual de Gestão?
+          </div>
+        `;
+      });
+
+      function formatarRespostaBotSegura(textoBruto) {
+        let html = escapeHtml(textoBruto);
+        html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        html = html.replace(/\n/g, '<br>');
+        return html;
+      }
+
+      document.getElementById('form-chat-rag').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const pergunta = inputChat.value.trim();
+        if (!pergunta) return;
+
+        const userBubble = document.createElement('div');
+        userBubble.className = 'chat-msg chat-msg-user';
+        userBubble.textContent = pergunta;
+        chatMessages.appendChild(userBubble);
+
+        inputChat.value = '';
+        inputChat.disabled = true;
+        btnEnviarChat.disabled = true;
+
+        const typingBubble = document.createElement('div');
+        typingBubble.className = 'chat-msg chat-msg-bot';
+        typingBubble.textContent = 'Consultando documentos do Manual...';
+        chatMessages.appendChild(typingBubble);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+
+        try {
+          const res = await runServer('perguntarAoAssistente', pergunta, state.chatHistorico);
+          typingBubble.remove();
+
+          const botBubble = document.createElement('div');
+          botBubble.className = 'chat-msg chat-msg-bot';
+
+          if (!res || !res.sucesso) {
+            botBubble.textContent = (res && res.mensagem) || 'Não foi possível responder agora.';
+          } else {
+            let fontesHtml = '';
+            if (res.fontes && res.fontes.length > 0) {
+              fontesHtml = `
+                <div class="chat-sources">
+                  <span class="chat-sources-title">Fontes consultadas no Manual:</span>
+                  ${res.fontes.map(f => `
+                    <a href="${escapeHtml(f.url)}" target="_blank" rel="noopener noreferrer" class="chat-source-link">
+                      📄 ${escapeHtml(f.titulo)} (${escapeHtml(f.tipo)})
+                    </a>
+                  `).join('')}
+                </div>
+              `;
+            }
+
+            botBubble.innerHTML = formatarRespostaBotSegura(res.resposta) + fontesHtml;
+
+            state.chatHistorico.push({ role: 'user', text: pergunta });
+            state.chatHistorico.push({ role: 'model', text: res.resposta });
+          }
+
+          chatMessages.appendChild(botBubble);
+        } catch (err) {
+          typingBubble.textContent = 'Erro de comunicação ao consultar o assistente.';
+        } finally {
+          inputChat.disabled = false;
+          btnEnviarChat.disabled = false;
+          inputChat.focus();
+          chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+      });
     }
   })();
 </script>

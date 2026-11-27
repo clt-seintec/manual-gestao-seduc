@@ -1,324 +1,492 @@
 /**
  * ============================================================================
- * DriveService.gs - Indexação do Google Drive e Extração Textual Segura
+ * DriveService.gs - Sincronização, Links e Indexação Documental (Drive -> Sheets)
  * Portal: Manual de Gestão da Tecnologia — SEDUC
  * ============================================================================
  */
 
-const LIMITE_TEXTO_INDEXADO = 15000; // Caracteres máximos por célula na planilha
+const MAX_CHARS_INDEXACAO = 45000;
 
 /**
- * Percorre a pasta configurada no Google Drive e atualiza a aba CONTEUDOS.
- * - Preserva metadados editados manualmente (Tema, Subtema, Público, Resumo, etc.)
- * - Atualiza datas e URLs de arquivos existentes
- * - Cadastra novos arquivos encontrados
- * - Marca como "Arquivado" arquivos removidos ou na lixeira (nunca exclui linhas)
+ * Gera os links de visualização, cópia e download usados pelo SearchService.gs
+ * e pelo modal de detalhes do portal.
+ */
+function gerarLinksAcessoDrive_(fileId, tipoOuUrl, urlFallback) {
+  const idLimpo = String(fileId || '').trim();
+  const urlBase = String(urlFallback || (String(tipoOuUrl || '').startsWith('http') ? tipoOuUrl : '') || '').trim();
+
+  if (!idLimpo) {
+    return {
+      url: urlBase || '#',
+      urlCopiar: urlBase || '#',
+      urlDownload: urlBase || '#'
+    };
+  }
+
+  return {
+    url: urlBase || ('https://drive.google.com/file/d/' + idLimpo + '/view'),
+    urlCopiar: 'https://docs.google.com/document/d/' + idLimpo + '/copy',
+    urlDownload: 'https://drive.google.com/uc?export=download&id=' + idLimpo
+  };
+}
+
+/**
+ * Localiza automaticamente o ID da pasta raiz do Google Drive no Config.gs,
+ * nas Propriedades do Script ou na aba CONFIG da planilha.
+ */
+function obterIdPastaRaizDrive_() {
+  if (typeof CONFIG !== 'undefined' && CONFIG) {
+    const idGlobal = CONFIG.DRIVE_FOLDER_ID || CONFIG.ROOT_FOLDER_ID ||
+      CONFIG.PASTA_RAIZ_ID || CONFIG.FOLDER_ID || CONFIG.ID_PASTA_DRIVE;
+    if (idGlobal && String(idGlobal).trim().length > 10) {
+      return String(idGlobal).trim();
+    }
+  }
+
+  if (typeof getPortalConfig_ === 'function') {
+    const cfg = getPortalConfig_();
+    if (cfg) {
+      const idCfg = cfg.rootFolderId || cfg.driveFolderId || cfg.folderId || cfg.pastaRaizId;
+      if (idCfg && String(idCfg).trim().length > 10) return String(idCfg).trim();
+    }
+  }
+
+  const props = PropertiesService.getScriptProperties().getProperties();
+  const chavesPossiveis = ['ROOT_FOLDER_ID', 'DRIVE_FOLDER_ID', 'FOLDER_ID', 'PASTA_RAIZ_ID', 'ID_PASTA_DRIVE'];
+  for (let i = 0; i < chavesPossiveis.length; i++) {
+    const val = props[chavesPossiveis[i]];
+    if (val && String(val).trim().length > 10) {
+      return String(val).trim();
+    }
+  }
+
+  const ss = obterPlanilhaCatalogo_();
+  const sheetConfig = ss.getSheetByName('CONFIG');
+  if (sheetConfig && sheetConfig.getLastRow() >= 1) {
+    const dadosCfg = sheetConfig.getDataRange().getValues();
+    for (let r = 0; r < dadosCfg.length; r++) {
+      const chave = String(dadosCfg[r][0] || '').toUpperCase();
+      const valor = String(dadosCfg[r][1] || '').trim();
+      if ((chave.includes('FOLDER') || chave.includes('PASTA') || chave.includes('DRIVE')) && valor.length > 15) {
+        return valor;
+      }
+    }
+  }
+
+  const sheetConteudos = ss.getSheetByName('CONTEUDOS');
+  if (sheetConteudos && sheetConteudos.getLastRow() >= 2) {
+    const fileIds = sheetConteudos.getRange(2, 9, Math.min(10, sheetConteudos.getLastRow() - 1), 1).getValues();
+    for (let j = 0; j < fileIds.length; j++) {
+      const fId = String(fileIds[j][0] || '').trim();
+      if (fId) {
+        try {
+          const arquivo = DriveApp.getFileById(fId);
+          const pais = arquivo.getParents();
+          if (pais.hasNext()) {
+            let pastaAtual = pais.next();
+            for (let nivel = 0; nivel < 2; nivel++) {
+              const avos = pastaAtual.getParents();
+              if (!avos.hasNext()) break;
+              const candidata = avos.next();
+              if (candidata.getName().toLowerCase().includes('manual') || candidata.getName().toLowerCase().includes('seintec')) {
+                pastaAtual = candidata;
+              }
+            }
+            return pastaAtual.getId();
+          }
+        } catch (e) {}
+      }
+    }
+  }
+
+  throw new Error('ID da pasta raiz do Google Drive não encontrado.');
+}
+
+function obterPlanilhaCatalogo_() {
+  if (typeof getCatalogSpreadsheet_ === 'function') {
+    return getCatalogSpreadsheet_();
+  }
+  if (typeof CONFIG !== 'undefined' && CONFIG && CONFIG.SPREADSHEET_ID) {
+    return SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+  }
+  const propId = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
+  if (propId) {
+    return SpreadsheetApp.openById(propId);
+  }
+  return SpreadsheetApp.getActiveSpreadsheet();
+}
+
+/**
+ * Sincroniza todos os arquivos da pasta raiz do Drive com a aba CONTEUDOS
+ * e preenche a Coluna Q (Texto indexado).
  */
 function atualizarIndiceDoDrive() {
-  const emailAtivo = Session.getActiveUser().getEmail();
-  const emailDono = Session.getEffectiveUser().getEmail();
-  const ehDonoOuTrigger = !emailAtivo || emailAtivo === emailDono;
-
-  if (!ehDonoOuTrigger && !usuarioEhAdministrador()) {
-    throw new Error('Acesso negado: apenas administradores podem atualizar o índice.');
-  }
-
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(30000)) {
-    throw new Error('Outra atualização de índice já está em andamento. Aguarde alguns instantes.');
-  }
+  lock.waitLock(30000);
 
-  const stats = {
-    novos: 0,
-    atualizados: 0,
-    arquivados: 0,
-    erros: 0
-  };
+  const stats = { novos: 0, atualizados: 0, arquivados: 0, erros: 0 };
 
   try {
-    const props = PropertiesService.getScriptProperties();
-    const folderId = props.getProperty('DRIVE_FOLDER_ID') || DEFAULTS.DRIVE_FOLDER_ID;
-    const pastaRaiz = DriveApp.getFolderById(folderId);
+    const rootFolderId = obterIdPastaRaizDrive_();
+    Logger.log('Pasta raiz detectada: ' + rootFolderId);
 
-    const ss = getPlanilhaCatalogo_();
-    const sheet = ss.getSheetByName(DEFAULTS.ABAS.CONTEUDOS);
+    const ss = obterPlanilhaCatalogo_();
+    const sheet = ss.getSheetByName('CONTEUDOS');
+    if (!sheet) {
+      throw new Error('Aba "CONTEUDOS" não encontrada na planilha de catálogo.');
+    }
+
     const lastRow = sheet.getLastRow();
+    const existentesPorFileId = new Map();
+    let maiorNumeroId = 0;
 
-    // Mapeia registros existentes pelo "ID do arquivo" (Coluna I = índice 8)
-    const mapaExistentes = new Map();
-    let maiorSequencial = 0;
+    if (lastRow >= 2) {
+      const dadosAtuais = sheet.getRange(2, 1, lastRow - 1, 19).getValues();
+      dadosAtuais.forEach((row, idx) => {
+        const idRegistro = String(row[0] || '').trim();
+        const fileId = String(row[8] || '').trim();
 
-    if (lastRow > 1) {
-      const dados = sheet.getRange(2, 1, lastRow - 1, 21).getValues();
-      dados.forEach((linha, idx) => {
-        const idCatalogo = String(linha[0] || '');
-        const matchSeq = idCatalogo.match(/(\d+)$/);
-        if (matchSeq) {
-          const num = parseInt(matchSeq[1], 10);
-          if (num > maiorSequencial) maiorSequencial = num;
+        const matchNum = idRegistro.match(/(\d+)$/);
+        if (matchNum) {
+          const num = parseInt(matchNum[1], 10);
+          if (num > maiorNumeroId) maiorNumeroId = num;
         }
-        const fileId = String(linha[8] || '').trim();
+
         if (fileId) {
-          mapaExistentes.set(fileId, {
+          existentesPorFileId.set(fileId, {
             rowIndex: idx + 2,
-            valores: linha
+            valores: row
           });
         }
       });
     }
 
-    // Varre arquivos recursivamente no Google Drive
-    const arquivosEncontrados = new Map();
-    varrerPastaRecursivamente_(pastaRaiz, '', arquivosEncontrados, stats);
+    const rootFolder = DriveApp.getFolderById(rootFolderId);
+    const arquivosDrive = [];
+    coletarArquivosRecursivo_(rootFolder, '', '', arquivosDrive);
 
-    const novasLinhas = [];
-    const tz = Session.getScriptTimeZone() || 'America/Sao_Paulo';
+    const fileIdsEncontrados = new Set();
 
-    arquivosEncontrados.forEach((info, fileId) => {
+    arquivosDrive.forEach((item) => {
+      const file = item.file;
+      const fileId = file.getId();
+      fileIdsEncontrados.add(fileId);
+
       try {
-        const dataFormatada = Utilities.formatDate(info.lastUpdated, tz, 'dd/MM/yyyy');
-        const tipoInferido = inferirTipoMaterial_(info.mimeType, info.name);
-        const temaInferido = inferirTemaPorPasta_(info.caminhoPasta);
+        const nomeOriginal = file.getName();
+        const tituloLimpo = limparTituloArquivo_(nomeOriginal);
+        const tema = item.tema || 'Geral';
+        const subtema = item.subtema || tema;
+        const tipo = inferirTipoConteudo_(nomeOriginal, file.getMimeType());
+        const publico = 'SEINTEC e SETEC';
+        const palavrasChave = gerarPalavrasChave_(tituloLimpo, tema, subtema);
+        const url = file.getUrl();
+        const dataAtualizacao = Utilities.formatDate(
+          file.getLastUpdated(),
+          Session.getScriptTimeZone() || 'America/Sao_Paulo',
+          'dd/MM/yyyy'
+        );
 
-        if (mapaExistentes.has(fileId)) {
-          // Atualiza registro existente preservando curadoria manual
-          const reg = mapaExistentes.get(fileId);
-          const v = reg.valores;
-          const dataAnterior = v[12] instanceof Date
-            ? Utilities.formatDate(v[12], tz, 'dd/MM/yyyy')
-            : String(v[12] || '');
+        const textoIndexado = extrairTextoArquivoDrive_(file);
+        const resumoExtraido = gerarResumoAutomatico_(textoIndexado, tituloLimpo);
 
-          const mudouArquivo = dataAnterior !== dataFormatada || !String(v[16] || '').trim();
+        if (existentesPorFileId.has(fileId)) {
+          const reg = existentesPorFileId.get(fileId);
+          const row = reg.valores;
 
-          v[1] = v[1] || limparExtensaoNome_(info.name); // Mantém título curado ou usa nome
-          v[9] = info.url; // Atualiza URL
-          if (v[10] === 'Arquivado') {
-            v[10] = 'Publicado'; // Reativa se voltou à pasta
+          row[1] = row[1] || tituloLimpo;
+          if (!row[2] || String(row[2]).startsWith('Material técnico:')) {
+            row[2] = resumoExtraido;
           }
-          v[12] = dataFormatada;
-          if (!v[18]) {
-            v[18] = 'Pasta: ' + (info.caminhoPasta || 'Raiz');
+          row[3] = tema;
+          row[4] = subtema;
+          row[6] = row[6] || tipo;
+          row[7] = row[7] || palavrasChave;
+          row[9] = url;
+          row[12] = dataAtualizacao;
+          if (textoIndexado) {
+            row[16] = textoIndexado; // Coluna Q: Texto indexado
           }
+          row[18] = 'Pasta: ' + (item.caminhoPasta || 'Raiz');
 
-          if (mudouArquivo) {
-            const textoExtraido = extrairTextoArquivo_(info.file, info.mimeType);
-            if (textoExtraido) {
-              v[16] = textoExtraido;
-            }
-          }
-
-          sheet.getRange(reg.rowIndex, 1, 1, 21).setValues([v]);
+          sheet.getRange(reg.rowIndex, 1, 1, 19).setValues([row]);
           stats.atualizados++;
         } else {
-          // Cadastra novo conteúdo
-          maiorSequencial++;
-          const novoId = 'MG-' + String(maiorSequencial).padStart(4, '0');
-          const tituloLimpo = limparExtensaoNome_(info.name);
-          const textoExtraido = extrairTextoArquivo_(info.file, info.mimeType);
+          maiorNumeroId++;
+          const novoId = 'MG-' + String(maiorNumeroId).padStart(4, '0');
+          const novaOrdem = lastRow + stats.novos;
 
-          novasLinhas.push([
-            novoId,                                      // A: ID
-            tituloLimpo,                                 // B: Título
-            'Material técnico: ' + tituloLimpo + '.',    // C: Resumo inicial
-            temaInferido,                                // D: Tema
-            info.caminhoPasta || 'Geral',                // E: Subtema
-            'SEINTEC e SETEC',                           // F: Público padrão
-            tipoInferido,                                // G: Tipo
-            gerarPalavrasChaveIniciais_(tituloLimpo, temaInferido, tipoInferido), // H: Palavras-chave
-            fileId,                                      // I: ID do arquivo
-            info.url,                                    // J: URL
-            'Publicado',                                 // K: Status
-            '1.0',                                       // L: Versão
-            dataFormatada,                               // M: Data da atualização
-            'COEGD / GT Manual',                         // N: Responsável
-            'Não',                                       // O: Destaque
-            maiorSequencial,                             // P: Ordem
-            textoExtraido,                               // Q: Texto indexado
-            '',                                          // R: Relacionados
-            'Pasta: ' + (info.caminhoPasta || 'Raiz'),   // S: Observações
-            '',                                          // T: Imagem
-            ''                                           // U: Objetivo
-          ]);
+          const novaLinha = [
+            novoId,
+            tituloLimpo,
+            resumoExtraido,
+            tema,
+            subtema,
+            publico,
+            tipo,
+            palavrasChave,
+            fileId,
+            url,
+            'Publicado',
+            '1.0',
+            dataAtualizacao,
+            'COEGD / GT Manual',
+            'Não',
+            novaOrdem,
+            textoIndexado,
+            '',
+            'Pasta: ' + (item.caminhoPasta || 'Raiz')
+          ];
+
+          sheet.appendRow(novaLinha);
           stats.novos++;
         }
-      } catch (errItem) {
+      } catch (errArq) {
         stats.erros++;
-        registrarLogErro('atualizarIndiceDoDrive:item', 'Erro ao processar arquivo: ' + info.name, errItem.message);
+        Logger.log('Erro no arquivo ' + file.getName() + ': ' + errArq.message);
       }
     });
 
-    if (novasLinhas.length > 0) {
-      const startRow = sheet.getLastRow() + 1;
-      sheet.getRange(startRow, 1, novasLinhas.length, 21).setValues(novasLinhas);
+    existentesPorFileId.forEach((reg, fileId) => {
+      if (!fileIdsEncontrados.has(fileId) && reg.valores[10] === 'Publicado') {
+        sheet.getRange(reg.rowIndex, 11).setValue('Arquivado');
+        stats.arquivados++;
+      }
+    });
+
+    if (typeof limparCache === 'function') {
+      limparCache();
     }
 
-    // Marca como Arquivado registros cujo arquivo não existe mais na pasta
-    mapaExistentes.forEach((reg, fileId) => {
-      if (!arquivosEncontrados.has(fileId)) {
-        const statusAtual = String(reg.valores[10] || '');
-        if (statusAtual !== 'Arquivado') {
-          sheet.getRange(reg.rowIndex, 11).setValue('Arquivado');
-          stats.arquivados++;
-        }
-      }
-    });
-
-    limparCache();
-    registrarLogInfo_('atualizarIndiceDoDrive', 'Indexação concluída', JSON.stringify(stats));
+    Logger.log('Sincronização concluída: ' + JSON.stringify(stats));
     return { sucesso: true, stats: stats };
 
-  } catch (erro) {
-    registrarLogErro('atualizarIndiceDoDrive', erro.message, erro.stack);
-    throw new Error('Falha na indexação do Google Drive: ' + erro.message);
   } finally {
     lock.releaseLock();
   }
 }
 
-/**
- * Varre recursivamente pastas e subpastas no Google Drive.
- */
-function varrerPastaRecursivamente_(pasta, caminhoAtual, mapaDestino, stats) {
-  const arquivos = pasta.getFiles();
-  while (arquivos.hasNext()) {
-    const file = arquivos.next();
-    if (file.isTrashed()) continue;
-    const mime = file.getMimeType();
-    // Ignora atalhos quebrados ou a própria planilha de catálogo se estiver na pasta
-    if (file.getName() === DEFAULTS.NOME_PLANILHA) continue;
-
-    mapaDestino.set(file.getId(), {
+function coletarArquivosRecursivo_(folder, temaAtual, subtemaAtual, acumulador) {
+  const files = folder.getFiles();
+  while (files.hasNext()) {
+    const file = files.next();
+    const nome = file.getName();
+    if (nome.startsWith('~$') || nome.startsWith('.') || nome.startsWith('TEMP_INDEX_')) {
+      continue;
+    }
+    acumulador.push({
       file: file,
-      id: file.getId(),
-      name: file.getName(),
-      mimeType: mime,
-      url: file.getUrl(),
-      lastUpdated: file.getLastUpdated(),
-      caminhoPasta: caminhoAtual
+      tema: temaAtual || 'Orientações Técnicas',
+      subtema: subtemaAtual || temaAtual || 'Geral',
+      caminhoPasta: subtemaAtual && subtemaAtual !== temaAtual
+        ? temaAtual + ' / ' + subtemaAtual
+        : temaAtual
     });
   }
 
-  const subpastas = pasta.getFolders();
-  while (subpastas.hasNext()) {
-    const sub = subpastas.next();
-    if (sub.isTrashed()) continue;
-    const proximoCaminho = caminhoAtual ? caminhoAtual + ' / ' + sub.getName() : sub.getName();
-    varrerPastaRecursivamente_(sub, proximoCaminho, mapaDestino, stats);
+  const subFolders = folder.getFolders();
+  while (subFolders.hasNext()) {
+    const sub = subFolders.next();
+    const nomeSub = sub.getName();
+    if (nomeSub.startsWith('.')) continue;
+
+    const proximoTema = temaAtual ? temaAtual : nomeSub;
+    const proximoSubtema = temaAtual ? nomeSub : nomeSub;
+    coletarArquivosRecursivo_(sub, proximoTema, proximoSubtema, acumulador);
   }
 }
 
 /**
- * Extrai texto de documentos Google nativos e arquivos de texto puro
- * sem modificar os arquivos originais.
+ * Extrai texto direto do XML interno de arquivos .docx (sem conversão Drive/DocumentApp).
  */
-function extrairTextoArquivo_(file, mimeType) {
-  try {
-    let texto = '';
+function extrairTextoDocxNativo_(file) {
+  const zipBlob = file.getBlob().setContentType('application/zip');
+  const entries = Utilities.unzip(zipBlob);
+  const partesTexto = [];
 
-    if (mimeType === MimeType.GOOGLE_DOCS) {
-      const doc = DocumentApp.openById(file.getId());
-      texto = doc.getBody().getText();
-    } else if (mimeType === MimeType.GOOGLE_SHEETS) {
-      const ss = SpreadsheetApp.openById(file.getId());
-      const sheets = ss.getSheets().slice(0, 5); // Limita às 5 primeiras abas por desempenho
-      texto = sheets.map(s => {
-        const vals = s.getDataRange().getValues();
-        return vals.map(r => r.join(' ')).join('\n');
-      }).join('\n');
-    } else if (mimeType === MimeType.GOOGLE_SLIDES) {
-      const pres = SlidesApp.openById(file.getId());
-      texto = pres.getSlides().map(slide => {
-        return slide.getShapes().map(sh => {
-          try {
-            return sh.getText().asString();
-          } catch (e) {
-            return '';
-          }
-        }).join(' ');
-      }).join('\n');
-    } else if (
-      mimeType === MimeType.PLAIN_TEXT ||
-      mimeType === 'text/csv' ||
-      mimeType === 'text/markdown'
-    ) {
-      texto = file.getBlob().getDataAsString('UTF-8');
+  entries.forEach(entry => {
+    const entryName = entry.getName();
+    if (entryName === 'word/document.xml' || /^word\/(header|footer)\d*\.xml$/.test(entryName)) {
+      const xml = entry.getDataAsString('UTF-8');
+      const limpo = xml
+        .replace(/<\/w:p>/g, '\n')
+        .replace(/<\/w:tc>/g, ' | ')
+        .replace(/<w:br[^>]*\/>/g, '\n')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'");
+      if (limpo.trim()) {
+        partesTexto.push(limpo.trim());
+      }
     }
-    // Nota sobre PDF e Word (.docx):
-    // Por segurança e integridade dos originais, não executamos conversão destrutiva.
-    // Caso o serviço avançado "Drive API v3" seja habilitado no projeto, pode-se ativar
-    // a extração temporária via Drive.Files.copy({mimeType: MimeType.GOOGLE_DOCS}) + exclusão imediata da cópia temporária.
+  });
 
-    return String(texto || '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .substring(0, LIMITE_TEXTO_INDEXADO);
+  return partesTexto.join('\n\n');
+}
+
+/**
+ * Extrai o texto de Google Docs, Sheets, Slides, Markdown/TXT, .docx (via XML nativo),
+ * .pdf (via Drive API v3 OCR/Export) e planilhas Excel.
+ */
+function extrairTextoArquivoDrive_(file) {
+  const mime = file.getMimeType();
+  const fileId = file.getId();
+  const nome = file.getName().toLowerCase();
+
+  try {
+    // 1. Documentos Google nativos
+    if (mime === MimeType.GOOGLE_DOCS) {
+      return sanitizarTextoIndexado_(DocumentApp.openById(fileId).getBody().getText());
+    }
+
+    // 2. Planilhas Google nativas
+    if (mime === MimeType.GOOGLE_SHEETS) {
+      const ss = SpreadsheetApp.openById(fileId);
+      const textoSheets = ss.getSheets().map(s =>
+        '[' + s.getName() + ']\n' +
+        s.getDataRange().getDisplayValues().map(r => r.filter(Boolean).join(' | ')).join('\n')
+      ).join('\n\n');
+      return sanitizarTextoIndexado_(textoSheets);
+    }
+
+    // 3. Apresentações Google nativas
+    if (mime === MimeType.GOOGLE_SLIDES) {
+      const pres = SlidesApp.openById(fileId);
+      const textoSlides = pres.getSlides().map((sl, i) =>
+        '[Slide ' + (i + 1) + ']\n' +
+        sl.getShapes().map(sh => sh.getText().asString()).join('\n')
+      ).join('\n\n');
+      return sanitizarTextoIndexado_(textoSlides);
+    }
+
+    // 4. Arquivos de texto simples ou Markdown
+    if (mime === MimeType.PLAIN_TEXT || nome.endsWith('.md') || nome.endsWith('.txt') || nome.endsWith('.csv')) {
+      return sanitizarTextoIndexado_(file.getBlob().getDataAsString('UTF-8'));
+    }
+
+    // 5. Arquivos Word modernos (.docx) -> Leitura direta do XML interno (rápido e imune a erros do DocumentApp)
+    if (mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || nome.endsWith('.docx')) {
+      const textoDocx = extrairTextoDocxNativo_(file);
+      if (textoDocx && textoDocx.trim().length > 10) {
+        return sanitizarTextoIndexado_(textoDocx);
+      }
+    }
+
+    // 6. Arquivos PDF (.pdf), Word antigo (.doc) e Excel (.xlsx/.xls) via Drive API v3 REST
+    const isPdfOuDoc = mime === MimeType.PDF || mime === 'application/msword' ||
+      nome.endsWith('.pdf') || nome.endsWith('.doc');
+
+    const isExcel = mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+      mime === 'application/vnd.ms-excel' ||
+      nome.endsWith('.xlsx') || nome.endsWith('.xls');
+
+    if (isPdfOuDoc || isExcel) {
+      const targetMime = isPdfOuDoc ? 'application/vnd.google-apps.document' : 'application/vnd.google-apps.spreadsheet';
+      const token = ScriptApp.getOAuthToken();
+      let tempId = null;
+
+      try {
+        const copyResp = UrlFetchApp.fetch(
+          'https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(fileId) + '/copy',
+          {
+            method: 'post',
+            contentType: 'application/json',
+            headers: { Authorization: 'Bearer ' + token },
+            payload: JSON.stringify({
+              name: 'TEMP_INDEX_' + file.getName(),
+              mimeType: targetMime
+            }),
+            muteHttpExceptions: true
+          }
+        );
+
+        if (copyResp.getResponseCode() === 200) {
+          const copyData = JSON.parse(copyResp.getContentText());
+          tempId = copyData && copyData.id;
+        }
+
+        if (tempId) {
+          if (isPdfOuDoc) {
+            const exportResp = UrlFetchApp.fetch(
+              'https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(tempId) + '/export?mimeType=text/plain',
+              {
+                method: 'get',
+                headers: { Authorization: 'Bearer ' + token },
+                muteHttpExceptions: true
+              }
+            );
+            if (exportResp.getResponseCode() === 200) {
+              return sanitizarTextoIndexado_(exportResp.getContentText('UTF-8'));
+            }
+          } else {
+            const ssTemp = SpreadsheetApp.openById(tempId);
+            const textoConvertido = ssTemp.getSheets().map(s =>
+              '[' + s.getName() + ']\n' +
+              s.getDataRange().getDisplayValues().map(r => r.filter(Boolean).join(' | ')).join('\n')
+            ).join('\n\n');
+            return sanitizarTextoIndexado_(textoConvertido);
+          }
+        }
+      } finally {
+        if (tempId) {
+          try {
+            DriveApp.getFileById(tempId).setTrashed(true);
+          } catch (eDel) {}
+        }
+      }
+    }
   } catch (e) {
-    registrarLogErro('extrairTextoArquivo_', 'Não foi possível extrair texto de ' + file.getName(), e.message);
-    return '';
+    Logger.log('Falha ao extrair ' + file.getName() + ': ' + e.message);
   }
+
+  return '';
 }
 
-function limparExtensaoNome_(nome) {
-  return String(nome || '').replace(/\.(pdf|docx?|xlsx?|pptx?|txt|csv|png|jpe?g)$/i, '').trim();
+function sanitizarTextoIndexado_(texto) {
+  if (!texto) return '';
+  return String(texto)
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .substring(0, MAX_CHARS_INDEXACAO);
 }
 
-function inferirTipoMaterial_(mimeType, nome) {
-  const n = normalizarTexto(nome);
+function limparTituloArquivo_(nomeArquivo) {
+  return String(nomeArquivo || '')
+    .replace(/\.(docx?|xlsx?|pptx?|pdf|md|txt|csv)$/i, '')
+    .trim();
+}
+
+function inferirTipoConteudo_(nomeArquivo, mimeType) {
+  const n = String(nomeArquivo || '').toLowerCase();
   if (n.includes('checklist')) return 'Checklist';
-  if (n.includes('fluxo')) return 'Fluxo';
-  if (n.includes('modelo') || n.includes('ata') || n.includes('formulario')) return 'Modelo';
-  if (n.includes('manual') || n.includes('guia')) return 'Manual';
-  if (n.includes('orientacao') || n.includes('protocolo')) return 'Orientação';
-
-  if (mimeType === MimeType.GOOGLE_SHEETS || mimeType.includes('spreadsheet') || mimeType.includes('excel')) {
-    return 'Planilha';
-  }
-  if (mimeType === MimeType.GOOGLE_SLIDES || mimeType.includes('presentation') || mimeType.includes('powerpoint')) {
-    return 'Apresentação';
-  }
-  if (mimeType.startsWith('image/')) {
-    return 'Fluxograma / Imagem';
-  }
+  if (n.includes('fluxo') || mimeType.startsWith('image/')) return 'Fluxo';
+  if (n.includes('manual') || n.includes('sumário') || n.includes('sumario')) return 'Manual';
+  if (n.includes('planilha') || mimeType === MimeType.GOOGLE_SHEETS || n.endsWith('.xlsx') || n.endsWith('.xls')) return 'Planilha';
+  if (n.includes('formulário') || n.includes('formulario') || n.includes('ficha') || n.includes('termo')) return 'Formulário';
   return 'Documento';
 }
 
-function inferirTemaPorPasta_(caminhoPasta) {
-  if (!caminhoPasta) return 'Orientações técnicas';
-  const primeiraPasta = caminhoPasta.split('/')[0].trim();
-  // Remove numeração inicial de pasta como "01 - Planejamento e governança"
-  return primeiraPasta.replace(/^\d+[\s._-]+/, '').trim() || 'Orientações técnicas';
-}
-
-function gerarPalavrasChaveIniciais_(titulo, tema, tipo) {
-  const palavras = (titulo + ' ' + tema + ' ' + tipo)
+function gerarPalavrasChave_(titulo, tema, subtema) {
+  const base = (titulo + ' ' + tema + ' ' + subtema)
     .toLowerCase()
-    .replace(/[^\w\sÀ-ÿ]/g, ' ')
+    .replace(/[^\wÀ-ÿ\s]/g, ' ')
     .split(/\s+/)
-    .filter(p => p.length > 3);
-  return Array.from(new Set(palavras)).slice(0, 10).join(', ');
+    .filter(w => w.length >= 3);
+  return Array.from(new Set(base)).slice(0, 10).join(', ');
 }
 
-/**
- * Gera URLs auxiliares para visualização, cópia e download conforme política do portal.
- */
-function gerarLinksAcessoDrive_(fileId, urlOriginal) {
-  if (!fileId) {
-    return {
-      urlVisualizar: urlOriginal || '',
-      urlCopiar: '',
-      urlDownload: ''
-    };
+function gerarResumoAutomatico_(textoIndexado, tituloLimpo) {
+  if (textoIndexado && textoIndexado.length > 60) {
+    const limpo = textoIndexado
+      .replace(/^#+\s*/gm, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return limpo.substring(0, 260) + (limpo.length > 260 ? '...' : '');
   }
-  const url = String(urlOriginal || '');
-  const isGoogleNative = url.includes('docs.google.com/');
-
-  return {
-    urlVisualizar: url || ('https://drive.google.com/file/d/' + fileId + '/view'),
-    urlCopiar: isGoogleNative
-      ? url.replace(/\/(edit|view|preview).*$/, '/copy')
-      : 'https://drive.google.com/uc?export=download&id=' + fileId,
-    urlDownload: isGoogleNative
-      ? url.replace(/\/(edit|view|preview).*$/, '/export?format=pdf')
-      : 'https://drive.google.com/uc?export=download&id=' + fileId
-  };
+  return 'Material técnico: ' + tituloLimpo + '.';
 }
